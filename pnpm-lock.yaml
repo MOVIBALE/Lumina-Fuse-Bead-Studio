@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@lumina/workshop-sdk':
-        specifier: https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.2/lumina-workshop-sdk-1.0.2.tgz
-        version: https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.2/lumina-workshop-sdk-1.0.2.tgz
+        specifier: git+https://github.com/lumina-layer-studio/Lumina-Workshop-SDK.git#a681ab60f7a4223d9aa4d04a7886d8ccee2dffd6
+        version: https://codeload.github.com/lumina-layer-studio/Lumina-Workshop-SDK/tar.gz/a681ab60f7a4223d9aa4d04a7886d8ccee2dffd6
       polygon-clipping:
         specifier: 0.15.7
         version: 0.15.7
@@ -365,9 +365,9 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@lumina/workshop-sdk@https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.2/lumina-workshop-sdk-1.0.2.tgz':
-    resolution: {integrity: sha512-UrkhqQvZubotsWIYN/rk/lIfz0tgHLDBiAluO9MnK1aXaZgfD6knkOeKf52WI5Tf0B74Yw8OoQrYDuMwARLZWg==, tarball: https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.2/lumina-workshop-sdk-1.0.2.tgz}
-    version: 1.0.2
+  '@lumina/workshop-sdk@https://codeload.github.com/lumina-layer-studio/Lumina-Workshop-SDK/tar.gz/a681ab60f7a4223d9aa4d04a7886d8ccee2dffd6':
+    resolution: {tarball: https://codeload.github.com/lumina-layer-studio/Lumina-Workshop-SDK/tar.gz/a681ab60f7a4223d9aa4d04a7886d8ccee2dffd6}
+    version: 1.1.0-dev.0
     engines: {node: '>=22'}
 
   '@rolldown/pluginutils@1.0.0-beta.11':
@@ -1405,7 +1405,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@lumina/workshop-sdk@https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.2/lumina-workshop-sdk-1.0.2.tgz': {}
+  '@lumina/workshop-sdk@https://codeload.github.com/lumina-layer-studio/Lumina-Workshop-SDK/tar.gz/a681ab60f7a4223d9aa4d04a7886d8ccee2dffd6': {}
 
   '@rolldown/pluginutils@1.0.0-beta.11': {}
 

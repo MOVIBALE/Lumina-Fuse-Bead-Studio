@@ -544,6 +544,37 @@ describe("BeadWorkshopModule", () => {
     harness.close();
   });
 
+  it("captures a live unsaved workspace and adopts a prepared snapshot through the SDK channel", async () => {
+    const harness = createSdkHarness();
+    const client = await harness.connect();
+    const engine = new FakeEngine();
+    const mounted = render(<BeadWorkshopModule client={client} locale="zh-CN" createEngine={() => engine} imageCodec={codec} autosaveDelayMs={60_000} />);
+    await screen.findByRole("button", { name: "新建空白底板" });
+    const empty = await harness.projectRequest("capture");
+    fireEvent.click(screen.getByRole("button", { name: "新建空白底板" }));
+    await screen.findByRole("heading", { name: "编辑豆子" });
+    const live = await harness.projectRequest("capture");
+    expect(live).toMatchObject({ schemaVersion: "bead-workspace/v1", state: { stage: "editor", editorState: { present: { rows: 32, columns: 32 } } } });
+    expect(harness.savedProjects()).toHaveLength(0);
+    const prepared = await harness.projectRequest("prepare", empty);
+    expect(screen.getByRole("heading", { name: "编辑豆子" })).toBeInTheDocument();
+    let committed!: Promise<unknown>;
+    await act(async () => {
+      committed = harness.projectRequest("commit", prepared);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await committed;
+    expect(await harness.projectRequest("capture")).toMatchObject({ state: { stage: "upload", editorState: null } });
+    const restore = await harness.projectRequest("prepare", live);
+    await act(async () => {
+      committed = harness.projectRequest("commit", restore);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await committed;
+    expect(screen.getByRole("heading", { name: "编辑豆子" })).toBeInTheDocument();
+    mounted.unmount(); client.close(); harness.close();
+  });
+
   it("trims blank auto-canvas margins before rendering the Lumina handoff", async () => {
     const cells: BeadCell[] = Array.from(
       { length: 4 * 4 },

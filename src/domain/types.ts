@@ -1,5 +1,5 @@
 export const BEAD_MODULE_ID = "lumina.bead-pattern" as const;
-export const BEAD_MODULE_VERSION = "1.0.8" as const;
+export const BEAD_MODULE_VERSION = "1.0.9-dev.0" as const;
 export const BEAD_PROJECT_SCHEMA_VERSION = "bead-project/v1" as const;
 export const BEAD_RENDER_SCHEMA_VERSION = "bead-render/v1" as const;
 export const BEAD_RECIPE_PAYLOAD_VERSION = "bead-recipe/v1" as const;

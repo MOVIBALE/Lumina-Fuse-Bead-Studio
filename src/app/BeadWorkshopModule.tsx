@@ -5,6 +5,7 @@ import type {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,6 +24,7 @@ import {
   validateBeadProject,
 } from "../domain/project";
 import { cropRaster, suggestGrid } from "../domain/recognition";
+import { BEAD_WORKSPACE_SCHEMA, prepareBeadWorkspace, type BeadWorkspaceState } from "../domain/workspaceSnapshot";
 import type { BeadRenderResult } from "../domain/renderer";
 import {
   BEAD_MODULE_VERSION,
@@ -355,6 +357,26 @@ export function BeadWorkshopModule({
   const activeProcessingRef =
     useRef<ActiveProcessingTask | null>(null);
   const editorProject = editorState?.present ?? null;
+  const workspaceRef = useRef<BeadWorkspaceState | null>(null);
+  const workspaceBusyRef = useRef(true);
+  const snapshotCommitRef = useRef<(() => void) | null>(null);
+  const [, renderWorkspaceCommit] = useState(0);
+  const previousWorkspaceRef = useRef<BeadWorkspaceState | null>(null);
+  useLayoutEffect(() => {
+    workspaceBusyRef.current = !initialized || stage === "loading" || isPicking || processingPhase !== "idle" || handoffBusy;
+    if (!initialized || stage === "loading") return;
+    const state: BeadWorkspaceState = { stage, editorState, originalRaster, workingRaster, projectSource, classification, calibrationDraft, crop, cropOpen, recalibrationSession, colorLibrary, previewColorMode };
+    const previous = previousWorkspaceRef.current;
+    workspaceRef.current = state;
+    previousWorkspaceRef.current = state;
+    if (snapshotCommitRef.current) {
+      const resolve = snapshotCommitRef.current;
+      snapshotCommitRef.current = null;
+      resolve();
+    } else if (previous && (previous.editorState !== editorState || previous.calibrationDraft !== calibrationDraft || previous.projectSource !== projectSource || previous.stage !== stage || previous.previewColorMode !== previewColorMode || previous.cropOpen !== cropOpen || JSON.stringify(previous.crop) !== JSON.stringify(crop))) {
+      client.projectSnapshots.changed();
+    }
+  });
   const committedCalibration = editorProject?.calibration ?? null;
   const colorMapping = useMemo(
     () =>
@@ -386,6 +408,37 @@ export function BeadWorkshopModule({
     activeProcessingRef.current = null;
     if (active) engineRef.current?.cancel(active.id);
   }, []);
+
+  useEffect(() => client.projectSnapshots.register({
+    capture() {
+      if (workspaceBusyRef.current || !workspaceRef.current) throw new Error("Finish the current image operation before saving this workspace");
+      return { schemaVersion: BEAD_WORKSPACE_SCHEMA, state: structuredClone(workspaceRef.current) };
+    },
+    prepare: prepareBeadWorkspace,
+    commit(value) {
+      const state = value as BeadWorkspaceState;
+      invalidateProcessing();
+      pickRequestRef.current += 1;
+      colorLibraryRequestRef.current += 1;
+      saveAttemptRef.current += 1;
+      return new Promise<void>((resolve) => {
+        snapshotCommitRef.current = resolve;
+        renderWorkspaceCommit((value) => value + 1);
+        setStage(state.stage);
+        setEditorState(state.editorState);
+        latestProjectRef.current = state.editorState?.present ?? null;
+        setOriginalRaster(state.originalRaster); setWorkingRaster(state.workingRaster);
+        setProjectSource(state.projectSource); setClassification(state.classification);
+        setCalibrationDraft(state.calibrationDraft); setCrop(state.crop); setCropOpen(state.cropOpen);
+        setRecalibrationSession(state.recalibrationSession);
+        setColorLibrary(state.colorLibrary); setPreviewColorMode(state.previewColorMode);
+        setHandoffSummary(null); setPendingReplacement(null); setHandoffBusy(false);
+        handoffFlowActiveRef.current = false;
+        setIsPicking(false); setProcessingPhase("idle"); setVisibleError(null);
+        setInitialized(true); setResumed(false);
+      });
+    },
+  }), [client, invalidateProcessing]);
 
   const isCurrentProcessing = useCallback(
     (token: ActiveProcessingTask) => {
