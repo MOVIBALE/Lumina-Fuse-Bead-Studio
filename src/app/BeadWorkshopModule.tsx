@@ -420,6 +420,8 @@ export function BeadWorkshopModule({
       invalidateProcessing();
       pickRequestRef.current += 1;
       colorLibraryRequestRef.current += 1;
+      colorLibraryFlightRef.current = null;
+      setColorLibraryRefreshing(false);
       saveAttemptRef.current += 1;
       return new Promise<void>((resolve) => {
         snapshotCommitRef.current = resolve;
