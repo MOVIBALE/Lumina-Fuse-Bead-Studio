@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "id": "lumina.bead-pattern",
-  "version": "1.0.8",
+  "version": "1.0.9-dev.0",
   "name": {
     "zh-CN": "拼豆工作台",
     "en-US": "Fuse Bead Studio"
@@ -21,6 +21,7 @@
   "entrypoints": {
     "ui": "ui/index.html"
   },
+  "projectSnapshots": { "protocol": 1, "schemas": ["bead-workspace/v1"] },
   "permissions": [
     {
       "name": "image.pick",

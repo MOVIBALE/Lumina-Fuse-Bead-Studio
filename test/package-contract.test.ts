@@ -16,7 +16,7 @@ describe("module package contract", () => {
 
     expect(manifest.version).toBe(packageJson.version);
     expect(manifest.version).toBe(BEAD_MODULE_VERSION);
-    expect(BEAD_MODULE_VERSION).toBe("1.0.8");
+    expect(BEAD_MODULE_VERSION).toBe("1.0.9-dev.0");
 
     expect(manifest).toEqual({
       manifestVersion: 1,
@@ -31,6 +31,7 @@ describe("module package contract", () => {
       workshopApi: { min: "1.0.0", maxExclusive: "2.0.0" },
       luminaVersion: { min: "2.0.0" },
       entrypoints: { ui: "ui/index.html" },
+      projectSnapshots: { protocol: 1, schemas: ["bead-workspace/v1"] },
       permissions: [
         { name: "image.pick", reason: "选择并读取拼豆图纸或截图" },
         { name: "project.storage", reason: "保存可继续编辑的拼豆工程" },

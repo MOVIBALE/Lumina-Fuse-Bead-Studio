@@ -544,6 +544,37 @@ describe("BeadWorkshopModule", () => {
     harness.close();
   });
 
+  it("captures a live unsaved workspace and adopts a prepared snapshot through the SDK channel", async () => {
+    const harness = createSdkHarness();
+    const client = await harness.connect();
+    const engine = new FakeEngine();
+    const mounted = render(<BeadWorkshopModule client={client} locale="zh-CN" createEngine={() => engine} imageCodec={codec} autosaveDelayMs={60_000} />);
+    await screen.findByRole("button", { name: "新建空白底板" });
+    const empty = await harness.projectRequest("capture");
+    fireEvent.click(screen.getByRole("button", { name: "新建空白底板" }));
+    await screen.findByRole("heading", { name: "编辑豆子" });
+    const live = await harness.projectRequest("capture");
+    expect(live).toMatchObject({ schemaVersion: "bead-workspace/v1", state: { stage: "editor", editorState: { present: { rows: 32, columns: 32 } } } });
+    expect(harness.savedProjects()).toHaveLength(0);
+    const prepared = await harness.projectRequest("prepare", empty);
+    expect(screen.getByRole("heading", { name: "编辑豆子" })).toBeInTheDocument();
+    let committed!: Promise<unknown>;
+    await act(async () => {
+      committed = harness.projectRequest("commit", prepared);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await committed;
+    expect(await harness.projectRequest("capture")).toMatchObject({ state: { stage: "upload", editorState: null } });
+    const restore = await harness.projectRequest("prepare", live);
+    await act(async () => {
+      committed = harness.projectRequest("commit", restore);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await committed;
+    expect(screen.getByRole("heading", { name: "编辑豆子" })).toBeInTheDocument();
+    mounted.unmount(); client.close(); harness.close();
+  });
+
   it("trims blank auto-canvas margins before rendering the Lumina handoff", async () => {
     const cells: BeadCell[] = Array.from(
       { length: 4 * 4 },
@@ -1914,6 +1945,102 @@ describe("BeadWorkshopModule", () => {
     client.close();
     harness.close();
   });
+
+  it.each([false, true])(
+    "finishes a pending color-library read with snapshot restore=%s",
+    async (restore) => {
+      const harness = createSdkHarness();
+      const client = await harness.connect();
+      const initialRead = deferred<WorkshopColorLibrary | null>();
+      vi.spyOn(client.colorLibrary, "read").mockReturnValueOnce(initialRead.promise);
+      const view = mountWorkshop(client, new FakeEngine());
+      try {
+        fireEvent.click(await screen.findByRole("button", { name: "新建空白底板" }));
+        await screen.findByRole("heading", { name: "编辑豆子" });
+        switchWorkbenchMode("打印准备");
+        const reload = screen.getByRole("button", { name: "重新读取耗材颜色" });
+        expect(reload).toBeDisabled();
+        expect(reload).toHaveAttribute("aria-busy", "true");
+
+        if (restore) {
+          const snapshot = await harness.projectRequest("capture");
+          const prepared = await harness.projectRequest("prepare", snapshot);
+          let finished = false;
+          const committed = harness.projectRequest("commit", prepared).then(() => { finished = true; });
+          await waitFor(() => expect(finished).toBe(true));
+          await committed;
+          expect(reload).toBeEnabled();
+        }
+
+        await act(async () => { initialRead.resolve(null); });
+        await waitFor(() => expect(reload).toBeEnabled());
+        expect(reload).not.toHaveAttribute("aria-busy", "true");
+      } finally {
+        view.unmount();
+        client.close();
+        harness.close();
+      }
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "allows a fresh read after snapshot restore while the superseded read later %ss",
+    async (outcome) => {
+      const harness = createSdkHarness();
+      const client = await harness.connect();
+      const oldRead = deferred<WorkshopColorLibrary | null>();
+      const newRead = deferred<WorkshopColorLibrary | null>();
+      const read = vi.spyOn(client.colorLibrary, "read")
+        .mockResolvedValueOnce(null)
+        .mockReturnValueOnce(oldRead.promise)
+        .mockReturnValueOnce(newRead.promise)
+        .mockResolvedValueOnce(RETRIED_LIBRARY);
+      const view = mountWorkshop(client, new FakeEngine());
+      try {
+        fireEvent.click(await screen.findByRole("button", { name: "新建空白底板" }));
+        await screen.findByRole("heading", { name: "编辑豆子" });
+        switchWorkbenchMode("打印准备");
+        const snapshot = await harness.projectRequest("capture");
+        const reload = screen.getByRole("button", { name: "重新读取耗材颜色" });
+        await waitFor(() => expect(reload).toBeEnabled());
+        fireEvent.click(reload);
+        expect(read).toHaveBeenCalledTimes(2);
+        expect(reload).toBeDisabled();
+
+        const prepared = await harness.projectRequest("prepare", snapshot);
+        let finished = false;
+        const committed = harness.projectRequest("commit", prepared).then(() => { finished = true; });
+        await waitFor(() => expect(finished).toBe(true));
+        await committed;
+        expect(reload).toBeEnabled();
+        fireEvent.click(reload);
+        expect(read).toHaveBeenCalledTimes(3);
+        expect(reload).toHaveAttribute("aria-busy", "true");
+
+        await act(async () => {
+          if (outcome === "resolve") oldRead.resolve({ ...RETRIED_LIBRARY, id: "stale", label: "Stale library" });
+          else oldRead.reject(new Error("Superseded request failed"));
+        });
+        expect(screen.getByText("尚未读取到耗材颜色，仍可使用原图颜色编辑。")).toBeInTheDocument();
+        expect(screen.queryByText("当前耗材：Stale library")).not.toBeInTheDocument();
+        expect(reload).toBeDisabled();
+        expect(reload).toHaveAttribute("aria-busy", "true");
+
+        await act(async () => {
+          newRead.resolve(null);
+        });
+        expect(reload).toBeEnabled();
+        expect(reload).not.toHaveAttribute("aria-busy", "true");
+        fireEvent.click(reload);
+        expect(await screen.findByText("当前耗材：Aliz RYBW")).toBeInTheDocument();
+        expect(read).toHaveBeenCalledTimes(4);
+      } finally {
+        view.unmount();
+        client.close();
+        harness.close();
+      }
+    },
+  );
 
   it("keeps source colors authoritative while explicitly mapping every library entry", async () => {
     const project = createBeadProject({

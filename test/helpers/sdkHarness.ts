@@ -27,6 +27,7 @@ interface MessageListener {
 export interface SdkHarness {
   connect(): Promise<WorkshopClient>;
   pushUiState(state: WorkshopUiState): Promise<void>;
+  projectRequest(operation: string, payload?: unknown): Promise<unknown>;
   methods(): WorkshopRpcMethod[];
   payloads(method: WorkshopRpcMethod): unknown[];
   savedProjects(): WorkshopProjectRecord<unknown>[];
@@ -44,6 +45,8 @@ export function createSdkHarness(
   let messageListener: MessageListener | null = null;
   let handoffIndex = 0;
   let colorLibraryIndex = 0;
+  let projectRequestSequence = 0;
+  const projectRequests = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
 
   const parent = {
     postMessage(message: unknown) {
@@ -52,6 +55,16 @@ export function createSdkHarness(
       const channel = new MessageChannel();
       ports.push(channel.port1);
       channel.port1.on("message", (data: unknown) => {
+        if ((data as { protocol?: string }).protocol === "lumina-workshop-project") {
+          const response = data as { kind: string; requestId: string; ok: boolean; result: unknown; error: string };
+          if (response.kind === "response") {
+            const request = projectRequests.get(response.requestId);
+            projectRequests.delete(response.requestId);
+            if (response.ok) request?.resolve(response.result);
+            else request?.reject(new Error(response.error));
+          }
+          return;
+        }
         const request = data as WorkshopRpcRequest;
         methods.push(request.method);
         requests.push(request);
@@ -159,6 +172,13 @@ export function createSdkHarness(
   };
 
   return {
+    projectRequest(operation, payload) {
+      return new Promise((resolve, reject) => {
+        const requestId = `project-${++projectRequestSequence}`;
+        projectRequests.set(requestId, { resolve, reject });
+        ports[0].postMessage({ protocol: "lumina-workshop-project", version: 1, kind: "request", requestId, operation, payload });
+      });
+    },
     connect: () =>
       connectWorkshop({
         moduleId: "lumina.bead-pattern",
