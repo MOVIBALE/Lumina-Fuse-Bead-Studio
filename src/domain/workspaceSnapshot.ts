@@ -26,7 +26,7 @@ function validateRaster(value: Raster | null) {
 }
 function validateHistory(editor: BeadEditorState) {
   validateBeadProject(editor.present);
-  if (!Array.isArray(editor.past) || !Array.isArray(editor.future) || editor.past.length + editor.future.length > 2048) invalid();
+  if (!Array.isArray(editor.past) || !Array.isArray(editor.future)) invalid();
   for (const action of ["undo", "redo"] as const) {
     let current = editor;
     const count = action === "undo" ? editor.past.length : editor.future.length;
