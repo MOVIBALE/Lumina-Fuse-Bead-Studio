@@ -13,6 +13,8 @@ import {
   type BeadProcessingEngine,
 } from "../src/app/BeadWorkshopModule";
 import { createBeadProject } from "../src/domain/project";
+import { beadEditorReducer, createBeadEditorState } from "../src/domain/editorReducer";
+import type { BeadWorkspaceState } from "../src/domain/workspaceSnapshot";
 import { renderBeadProject } from "../src/domain/renderer";
 import type {
   BeadCell,
@@ -573,6 +575,70 @@ describe("BeadWorkshopModule", () => {
     await committed;
     expect(screen.getByRole("heading", { name: "编辑豆子" })).toBeInTheDocument();
     mounted.unmount(); client.close(); harness.close();
+  });
+
+  it("round-trips a long live editing history through the SDK snapshot channel", async () => {
+    const harness = createSdkHarness();
+    const client = await harness.connect();
+    const mounted = render(
+      <BeadWorkshopModule
+        client={client}
+        locale="zh-CN"
+        createEngine={() => new FakeEngine()}
+        imageCodec={codec}
+        autosaveDelayMs={60_000}
+      />,
+    );
+    try {
+      await screen.findByRole("button", { name: "新建空白底板" });
+      const snapshot = await harness.projectRequest("capture") as {
+        schemaVersion: string;
+        state: BeadWorkspaceState;
+      };
+      let editor = createBeadEditorState(createBeadProject({
+        projectId: "long-history",
+        moduleVersion: "1.0.9-dev.0",
+        now: "2026-01-01T00:00:00Z",
+        rows: 2,
+        columns: 2,
+      }));
+      for (let index = 0; index < 2049; index++) {
+        editor = beadEditorReducer(editor, {
+          type: "apply-tool",
+          tool: index % 2 === 0 ? "paint" : "erase",
+          cellIndex: 1,
+        });
+      }
+      editor = beadEditorReducer(editor, { type: "undo" });
+      expect(editor.past).toHaveLength(2048);
+      expect(editor.future).toHaveLength(1);
+      snapshot.state = { ...snapshot.state, stage: "editor", editorState: editor };
+      const prepared = await harness.projectRequest("prepare", snapshot);
+      let committed!: Promise<unknown>;
+      await act(async () => {
+        committed = harness.projectRequest("commit", prepared);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      await committed;
+      await screen.findByRole("heading", { name: "编辑豆子" });
+      expect(await harness.projectRequest("capture")).toMatchObject({
+        state: { editorState: editor },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "重做" }));
+      const redone = beadEditorReducer(editor, { type: "redo" });
+      expect(await harness.projectRequest("capture")).toMatchObject({
+        state: { editorState: redone },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+      expect(await harness.projectRequest("capture")).toMatchObject({
+        state: { editorState: editor },
+      });
+      expect(harness.savedProjects()).toHaveLength(0);
+    } finally {
+      mounted.unmount();
+      client.close();
+      harness.close();
+    }
   });
 
   it("trims blank auto-canvas margins before rendering the Lumina handoff", async () => {
