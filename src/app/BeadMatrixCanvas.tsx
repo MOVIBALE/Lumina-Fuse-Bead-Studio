@@ -8,10 +8,14 @@ import {
 } from "react";
 
 import {
+  createBeadStrokeId,
   expandBrushFootprint,
   expandStrokeCells,
   interpolateGridCells,
+  remapCellIndexWithOffsets,
+  resolveStrokeGridTransition,
   type BeadBrushSize,
+  type StrokeGridSnapshot,
 } from "../domain/gridBrush";
 import type { BeadRenderResult } from "../domain/renderer";
 import type { BeadProject } from "../domain/types";
@@ -200,9 +204,10 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
 }: BeadMatrixCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const draggingRef = useRef(false);
-  const strokeSeqRef = useRef(0);
   const activeStrokeIdRef = useRef<string | undefined>(undefined);
-  const lastPickedCellRef = useRef<number | null>(null);
+  const strokeStateRef = useRef<
+    (StrokeGridSnapshot & { last: number }) | null
+  >(null);
   const bounds = useMemo(
     () => resolveBounds(project, viewport),
     [project, viewport],
@@ -294,14 +299,42 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
       | MouseEvent<HTMLCanvasElement>,
   ) => {
     const cellIndex = cellIndexAtPointer(event);
-    if (
-      cellIndex === null ||
-      cellIndex === lastPickedCellRef.current
-    ) {
+    if (cellIndex === null) return;
+
+    let previous: number | null = null;
+    const prevStroke = strokeStateRef.current;
+    if (prevStroke !== null) {
+      const transition = resolveStrokeGridTransition(prevStroke, project);
+      if (transition === "same") {
+        previous = prevStroke.last;
+      } else if (transition !== "reset") {
+        previous = remapCellIndexWithOffsets(
+          prevStroke.rows,
+          prevStroke.cols,
+          project.rows,
+          project.columns,
+          transition[0],
+          transition[1],
+          prevStroke.last,
+        );
+        strokeStateRef.current =
+          previous !== null
+            ? {
+                id: project.projectId,
+                rows: project.rows,
+                cols: project.columns,
+                last: previous,
+                batch: [],
+              }
+            : null;
+      } else {
+        strokeStateRef.current = null;
+      }
+    }
+    if (cellIndex === previous) {
       return;
     }
-    const previous = lastPickedCellRef.current;
-    lastPickedCellRef.current = cellIndex;
+
     const segment =
       previous !== null && allowDrag
         ? interpolateGridCells(
@@ -313,15 +346,25 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
         : [cellIndex];
     if (segment.length === 0) return;
 
-    if (onPickCells) {
-      const cells = allowDrag
+    const cells = onPickCells
+      ? allowDrag
         ? expandStrokeCells(project.rows, project.columns, segment, brushSize)
         : expandBrushFootprint(
             project.rows,
             project.columns,
             cellIndex,
             brushSize,
-          );
+          )
+      : segment;
+    strokeStateRef.current = {
+      id: project.projectId,
+      rows: project.rows,
+      cols: project.columns,
+      last: cellIndex,
+      batch: cells,
+    };
+
+    if (onPickCells) {
       onPickCells(cells, activeStrokeIdRef.current);
       return;
     }
@@ -338,11 +381,10 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
       onPointerDown={(event) => {
         if (!isInteractive) return;
         draggingRef.current = false;
-        lastPickedCellRef.current = null;
+        strokeStateRef.current = null;
         activeStrokeIdRef.current = undefined;
         if (!allowDrag) return;
-        strokeSeqRef.current += 1;
-        activeStrokeIdRef.current = `matrix-stroke-${strokeSeqRef.current}`;
+        activeStrokeIdRef.current = createBeadStrokeId("matrix");
         draggingRef.current = true;
         event.currentTarget.setPointerCapture?.(event.pointerId);
         pickAtPointer(event);
@@ -352,7 +394,7 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
       }}
       onPointerUp={(event) => {
         draggingRef.current = false;
-        lastPickedCellRef.current = null;
+        strokeStateRef.current = null;
         activeStrokeIdRef.current = undefined;
         if (allowDrag) {
           event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -360,15 +402,15 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
       }}
       onPointerCancel={() => {
         draggingRef.current = false;
-        lastPickedCellRef.current = null;
+        strokeStateRef.current = null;
         activeStrokeIdRef.current = undefined;
       }}
       onClick={(event) => {
         if (!isInteractive || allowDrag) return;
-        lastPickedCellRef.current = null;
+        strokeStateRef.current = null;
         activeStrokeIdRef.current = undefined;
         pickAtPointer(event);
-        lastPickedCellRef.current = null;
+        strokeStateRef.current = null;
       }}
       className={cx(
         "bead-canvas",

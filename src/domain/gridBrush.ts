@@ -1,4 +1,93 @@
+import { AUTO_EXPAND_CANVAS_GROWTH } from "./project";
+import { MAX_BEAD_GRID_SIZE } from "./types";
+
 export type BeadBrushSize = 1 | 2 | 3;
+
+const EDGE_MARGIN = 2;
+let nextStrokeCounter = 0;
+
+export function createBeadStrokeId(prefix = "s"): string {
+  nextStrokeCounter += 1;
+  const nonce =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${prefix}-${nextStrokeCounter}-${nonce}`;
+}
+
+export function remapCellIndexWithOffsets(
+  oldRows: number,
+  oldColumns: number,
+  newRows: number,
+  newColumns: number,
+  addTop: number,
+  addLeft: number,
+  cellIndex: number,
+): number | null {
+  if (
+    !Number.isInteger(cellIndex) ||
+    cellIndex < 0 ||
+    cellIndex >= oldRows * oldColumns
+  ) {
+    return null;
+  }
+  const row = Math.floor(cellIndex / oldColumns) + addTop;
+  const col = (cellIndex % oldColumns) + addLeft;
+  return row >= 0 && row < newRows && col >= 0 && col < newColumns
+    ? row * newColumns + col
+    : null;
+}
+
+export interface StrokeGridSnapshot {
+  id: string;
+  rows: number;
+  cols: number;
+  batch: readonly number[];
+}
+
+export function resolveStrokeGridTransition(
+  prev: StrokeGridSnapshot,
+  next: { projectId: string; rows: number; columns: number },
+): "same" | "reset" | readonly [addTop: number, addLeft: number] {
+  if (prev.id !== next.projectId) return "reset";
+  if (prev.rows === next.rows && prev.cols === next.columns) return "same";
+  if (next.rows >= prev.rows && next.columns >= prev.cols) {
+    let curRows = prev.rows;
+    let curCols = prev.cols;
+    let addTop = 0;
+    let addLeft = 0;
+    const total = prev.rows * prev.cols;
+    for (const orig of prev.batch) {
+      if (!Number.isInteger(orig) || orig < 0 || orig >= total) continue;
+      const r = Math.floor(orig / prev.cols) + addTop;
+      const c = (orig % prev.cols) + addLeft;
+      let remR = MAX_BEAD_GRID_SIZE - curRows;
+      let remC = MAX_BEAD_GRID_SIZE - curCols;
+      const top =
+        r < EDGE_MARGIN ? Math.min(AUTO_EXPAND_CANVAS_GROWTH, remR) : 0;
+      remR -= top;
+      const bot =
+        curRows - 1 - r < EDGE_MARGIN
+          ? Math.min(AUTO_EXPAND_CANVAS_GROWTH, remR)
+          : 0;
+      const left =
+        c < EDGE_MARGIN ? Math.min(AUTO_EXPAND_CANVAS_GROWTH, remC) : 0;
+      remC -= left;
+      const right =
+        curCols - 1 - c < EDGE_MARGIN
+          ? Math.min(AUTO_EXPAND_CANVAS_GROWTH, remC)
+          : 0;
+      addTop += top;
+      addLeft += left;
+      curRows += top + bot;
+      curCols += left + right;
+    }
+    if (curRows === next.rows && curCols === next.columns) {
+      return [addTop, addLeft];
+    }
+  }
+  return "reset";
+}
 
 /**
  * Walks an integer Bresenham line from `fromCellIndex` to `toCellIndex`

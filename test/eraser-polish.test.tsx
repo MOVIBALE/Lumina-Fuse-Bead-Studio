@@ -4,6 +4,8 @@ import { InstancedMesh, Matrix4, Quaternion, Scene, Vector3 } from "three";
 import { describe, expect, it, vi } from "vitest";
 
 import { BeadEditorStep } from "../src/app/BeadEditorStep";
+import { BeadThreePreview } from "../src/app/BeadThreePreview";
+import type { BeadThreePreviewController } from "../src/app/beadThreePreviewController";
 import {
   BEAD_EXIT_ANIMATION_MS,
   createBeadFastPreviewLayer,
@@ -17,7 +19,10 @@ import {
   expandBrushFootprint,
   interpolateGridCells,
 } from "../src/domain/gridBrush";
-import { createBeadProject } from "../src/domain/project";
+import {
+  AUTO_EXPAND_CANVAS_INITIAL_SIZE,
+  createBeadProject,
+} from "../src/domain/project";
 import { translate } from "../src/i18n/translations";
 
 const t = (key: string) => translate("zh-CN", key);
@@ -320,5 +325,349 @@ describe("eraser brush, stroke interpolation, and single-stroke undo", () => {
     expect(layer.hasActiveAnimations()).toBe(true);
     layer.advance(600 + 370 + 100);
     expect(layer.hasActiveAnimations()).toBe(false);
+  });
+
+  it("keeps separate undo steps across 2D auxiliary collapse and re-expand", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const project = createBeadProject({
+      projectId: "remount-stroke-id",
+      moduleVersion: "1.0.9-dev.0",
+      now: "2026-11-19T00:00:00.000Z",
+      rows: 4,
+      columns: 4,
+      palette: [[239, 68, 68]],
+      cells: Array.from({ length: 16 }, () => ({
+        kind: "color" as const,
+        paletteIndex: 0,
+      })),
+    });
+
+    let latestState = createBeadEditorState(project);
+    function Harness() {
+      const [state, dispatch] = useReducer(beadEditorReducer, latestState);
+      latestState = state;
+      return (
+        <>
+          <BeadEditorStep
+            state={state}
+            sourceRaster={null}
+            translate={t}
+            dispatch={dispatch}
+            onNewProject={vi.fn()}
+          />
+          <output data-testid="colored-count">
+            {state.present.cells.filter((c) => c.kind === "color").length}
+          </output>
+        </>
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "擦除" }));
+
+    // 1. Expand 2D view and erase cell A (0, 0) -> index 0
+    fireEvent.click(screen.getByRole("button", { name: "放大 2D 对照" }));
+    const firstCanvas = screen.getByRole("img", { name: "拼豆平面豆格图" });
+    vi.spyOn(firstCanvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 160,
+      bottom: 160,
+      width: 160,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(firstCanvas, { pointerId: 1, clientX: 20, clientY: 20 });
+    fireEvent.pointerUp(firstCanvas, { pointerId: 1, clientX: 20, clientY: 20 });
+    expect(screen.getByTestId("colored-count")).toHaveTextContent("15");
+
+    // 2. Collapse and re-expand 2D view (remounts BeadMatrixCanvas), then erase cell B (1, 1) -> index 5
+    fireEvent.click(screen.getByRole("button", { name: "收起 2D 对照" }));
+    fireEvent.click(screen.getByRole("button", { name: "放大 2D 对照" }));
+    const secondCanvas = screen.getByRole("img", { name: "拼豆平面豆格图" });
+    vi.spyOn(secondCanvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 160,
+      bottom: 160,
+      width: 160,
+      height: 160,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(secondCanvas, { pointerId: 2, clientX: 60, clientY: 60 });
+    fireEvent.pointerUp(secondCanvas, { pointerId: 2, clientX: 60, clientY: 60 });
+    expect(screen.getByTestId("colored-count")).toHaveTextContent("14");
+
+    // 3. Collapse so toolbar Undo button is accessible, then click Undo ONCE -> only B is restored!
+    fireEvent.click(screen.getByRole("button", { name: "收起 2D 对照" }));
+    const undoButton = screen.getByRole("button", { name: "撤销" });
+    fireEvent.click(undoButton);
+
+    expect(screen.getByTestId("colored-count")).toHaveTextContent("15");
+    expect(latestState.present.cells[0]?.kind).toBe("empty");
+    expect(latestState.present.cells[5]?.kind).toBe("color");
+    expect(undoButton).not.toBeDisabled();
+
+    // 4. Second Undo restores A and disables Undo
+    fireEvent.click(undoButton);
+    expect(screen.getByTestId("colored-count")).toHaveTextContent("16");
+    expect(latestState.present.cells[0]?.kind).toBe("color");
+    expect(undoButton).toBeDisabled();
+  });
+
+  it("remaps stroke origin when auto-expand grows the 2D board mid-drag on right and left edges", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const makeBlank32 = (id: string) =>
+      createBeadProject({
+        projectId: id,
+        moduleVersion: "1.0.9-dev.0",
+        now: "2026-11-19T00:00:00.000Z",
+        rows: AUTO_EXPAND_CANVAS_INITIAL_SIZE,
+        columns: AUTO_EXPAND_CANVAS_INITIAL_SIZE,
+        palette: [[37, 99, 235]],
+        canvasMode: "auto-expand",
+      });
+
+    let latestState = createBeadEditorState(makeBlank32("auto-expand-2d-right"));
+    function Harness() {
+      const [state, dispatch] = useReducer(beadEditorReducer, latestState);
+      latestState = state;
+      return (
+        <BeadEditorStep
+          state={state}
+          sourceRaster={null}
+          translate={t}
+          dispatch={dispatch}
+          onNewProject={vi.fn()}
+        />
+      );
+    }
+
+    const view = render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "放大 2D 对照" }));
+    const matrixCanvas = screen.getByRole("img", {
+      name: "拼豆平面豆格图",
+    }) as HTMLCanvasElement;
+    vi.spyOn(matrixCanvas, "getBoundingClientRect").mockImplementation(() => {
+      const width = latestState.present.columns * 10;
+      const height = latestState.present.rows * 10;
+      return {
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+        width,
+        height,
+        toJSON: () => ({}),
+      };
+    });
+
+    // Row 17 (0-based row 16), drag continuously from col 28 -> 29 -> 30 (expands 32->40) -> 31
+    fireEvent.pointerDown(matrixCanvas, {
+      pointerId: 1,
+      clientX: 285,
+      clientY: 165,
+    });
+    fireEvent.pointerMove(matrixCanvas, {
+      pointerId: 1,
+      clientX: 295,
+      clientY: 165,
+    });
+    fireEvent.pointerMove(matrixCanvas, {
+      pointerId: 1,
+      clientX: 305,
+      clientY: 165,
+    });
+    expect(latestState.present.columns).toBe(40);
+    fireEvent.pointerMove(matrixCanvas, {
+      pointerId: 1,
+      clientX: 315,
+      clientY: 165,
+    });
+    fireEvent.pointerUp(matrixCanvas, {
+      pointerId: 1,
+      clientX: 315,
+      clientY: 165,
+    });
+
+    const coloredRight = latestState.present.cells.flatMap((cell, idx) =>
+      cell.kind === "color" ? [idx] : [],
+    );
+    expect(coloredRight).toEqual([
+      16 * 40 + 28,
+      16 * 40 + 29,
+      16 * 40 + 30,
+      16 * 40 + 31,
+    ]);
+
+    // Single Undo reverses the entire continuous drag (including expansion) in one step
+    fireEvent.click(screen.getByRole("button", { name: "收起 2D 对照" }));
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    expect(latestState.present.columns).toBe(32);
+    expect(
+      latestState.present.cells.every((cell) => cell.kind === "empty"),
+    ).toBe(true);
+
+    // Also verify left-edge expansion (addLeft = 8 shifts existing columns right by +8)
+    fireEvent.click(screen.getByRole("button", { name: "放大 2D 对照" }));
+    const leftCanvas = screen.getByRole("img", {
+      name: "拼豆平面豆格图",
+    }) as HTMLCanvasElement;
+    vi.spyOn(leftCanvas, "getBoundingClientRect").mockImplementation(() => {
+      const width = latestState.present.columns * 10;
+      const height = latestState.present.rows * 10;
+      return {
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+        width,
+        height,
+        toJSON: () => ({}),
+      };
+    });
+    // Row 16: drag left from col 3 -> col 2 -> col 1 (expands left by +8, so col 1 becomes col 9) -> col 8
+    fireEvent.pointerDown(leftCanvas, { pointerId: 2, clientX: 35, clientY: 165 });
+    fireEvent.pointerMove(leftCanvas, { pointerId: 2, clientX: 25, clientY: 165 });
+    fireEvent.pointerMove(leftCanvas, { pointerId: 2, clientX: 15, clientY: 165 });
+    expect(latestState.present.columns).toBe(40);
+    fireEvent.pointerMove(leftCanvas, { pointerId: 2, clientX: 85, clientY: 165 });
+    fireEvent.pointerUp(leftCanvas, { pointerId: 2, clientX: 85, clientY: 165 });
+
+    const coloredLeft = latestState.present.cells.flatMap((cell, idx) =>
+      cell.kind === "color" ? [idx] : [],
+    );
+    expect(coloredLeft).toEqual([
+      16 * 40 + 8,
+      16 * 40 + 9,
+      16 * 40 + 10,
+      16 * 40 + 11,
+    ]);
+    view.unmount();
+  });
+
+  it("remaps 3D drag stroke origin when auto-expand grows the board mid-stroke", () => {
+    let nextPickCell: number | null = null;
+    const controller: BeadThreePreviewController = {
+      previewProject: vi.fn(),
+      update: vi.fn(),
+      pickCellAt: vi.fn(() => nextPickCell),
+      setSelectedCell: vi.fn(),
+      setHoveredCell: vi.fn(),
+      setHoverHighlight: vi.fn(),
+      setActionOriginCell: vi.fn(),
+      resize: vi.fn(),
+      zoomIn: vi.fn(),
+      zoomOut: vi.fn(),
+      fit: vi.fn(),
+      resetView: vi.fn(),
+      dispose: vi.fn(),
+    };
+
+    const initial = createBeadProject({
+      projectId: "auto-expand-3d",
+      moduleVersion: "1.0.9-dev.0",
+      now: "2026-11-19T00:00:00.000Z",
+      rows: AUTO_EXPAND_CANVAS_INITIAL_SIZE,
+      columns: AUTO_EXPAND_CANVAS_INITIAL_SIZE,
+      palette: [[37, 99, 235]],
+      canvasMode: "auto-expand",
+    });
+
+    let latestState = createBeadEditorState(initial);
+    function ThreeHarness() {
+      const [state, dispatch] = useReducer(beadEditorReducer, latestState);
+      latestState = state;
+      return (
+        <BeadThreePreview
+          project={state.present}
+          ariaLabel="三维扩板拖绘"
+          createController={() => controller}
+          createSurfaceRenderer={() => ({
+            render: () => new Promise(() => undefined),
+            dispose: vi.fn(),
+          })}
+          activeTool="paint"
+          allowDrag
+          editingEnabled
+          onPickCells={(cellIndices, strokeId) => {
+            if (cellIndices.length === 0) return;
+            dispatch({
+              type: "apply-tool",
+              tool: "paint",
+              cellIndex: cellIndices[cellIndices.length - 1]!,
+              cellIndices,
+              paletteIndex: 0,
+              ...(strokeId ? { strokeId } : {}),
+            });
+          }}
+        />
+      );
+    }
+
+    render(<ThreeHarness />);
+    const canvas = screen.getByRole("img", { name: "三维扩板拖绘" });
+
+    // Row 16: col 28 -> 29 -> 30 (expands 32x32 -> 32x40) -> 31 in 32x40
+    nextPickCell = 16 * 32 + 28;
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      buttons: 1,
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 100,
+      clientY: 100,
+    });
+    nextPickCell = 16 * 32 + 29;
+    fireEvent.pointerMove(canvas, {
+      buttons: 1,
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 110,
+      clientY: 100,
+    });
+    nextPickCell = 16 * 32 + 30;
+    fireEvent.pointerMove(canvas, {
+      buttons: 1,
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 120,
+      clientY: 100,
+    });
+    expect(latestState.present.columns).toBe(40);
+
+    nextPickCell = 16 * 40 + 31;
+    fireEvent.pointerMove(canvas, {
+      buttons: 1,
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 130,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 130,
+      clientY: 100,
+    });
+
+    const colored3d = latestState.present.cells.flatMap((cell, idx) =>
+      cell.kind === "color" ? [idx] : [],
+    );
+    expect(colored3d).toEqual([
+      16 * 40 + 28,
+      16 * 40 + 29,
+      16 * 40 + 30,
+      16 * 40 + 31,
+    ]);
+    expect(latestState.past).toHaveLength(1);
   });
 });

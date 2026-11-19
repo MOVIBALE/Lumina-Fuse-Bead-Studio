@@ -11,10 +11,14 @@ import {
   type BeadEditorTool,
 } from "../domain/editorReducer";
 import {
+  createBeadStrokeId,
   expandBrushFootprint,
   expandStrokeCells,
   interpolateGridCells,
+  remapCellIndexWithOffsets,
+  resolveStrokeGridTransition,
   type BeadBrushSize,
+  type StrokeGridSnapshot,
 } from "../domain/gridBrush";
 import {
   buildPhysicalPreviewModel,
@@ -80,7 +84,7 @@ interface ExactPreviewState {
 
 type ThreeInteractionMode = "edit" | "view";
 
-interface ActiveEditGesture {
+interface ActiveEditGesture extends StrokeGridSnapshot {
   pointerId: number;
   strokeId: string;
   startClientX: number;
@@ -135,8 +139,10 @@ export function BeadThreePreview({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<BeadThreePreviewController | null>(null);
   const editGestureRef = useRef<ActiveEditGesture | null>(null);
-  const strokeSequenceRef = useRef(0);
   const hoveredCellRef = useRef<number | null>(null);
+  const hoverGridRef = useRef<
+    readonly [id: string, rows: number, cols: number] | null
+  >(null);
   const projectRef = useRef(project);
   const onPickCellRef = useRef(onPickCell);
   const onPickCellsRef = useRef(onPickCells);
@@ -578,10 +584,97 @@ export function BeadThreePreview({
     }
   }, [selectedCellIndex, supportsThreePreview, unavailable]);
 
+  const syncGestureToProject = (currentProject: BeadProject) => {
+    const gesture = editGestureRef.current;
+    let hoverRemap:
+      | readonly [top: number, left: number, rows: number, cols: number]
+      | "reset"
+      | null = null;
+    if (gesture !== null) {
+      const transition = resolveStrokeGridTransition(gesture, currentProject);
+      if (transition !== "same" && transition !== "reset") {
+        const oldRows = gesture.rows;
+        const oldCols = gesture.cols;
+        hoverRemap = [transition[0], transition[1], oldRows, oldCols];
+        gesture.lastCellIndex =
+          gesture.lastCellIndex !== null
+            ? remapCellIndexWithOffsets(
+                oldRows,
+                oldCols,
+                currentProject.rows,
+                currentProject.columns,
+                transition[0],
+                transition[1],
+                gesture.lastCellIndex,
+              )
+            : null;
+        const nextVisited = new Set<number>();
+        for (const visited of gesture.visitedCellIndices) {
+          const remapped = remapCellIndexWithOffsets(
+            oldRows,
+            oldCols,
+            currentProject.rows,
+            currentProject.columns,
+            transition[0],
+            transition[1],
+            visited,
+          );
+          if (remapped !== null) nextVisited.add(remapped);
+        }
+        gesture.visitedCellIndices = nextVisited;
+        gesture.id = currentProject.projectId;
+        gesture.rows = currentProject.rows;
+        gesture.cols = currentProject.columns;
+        gesture.batch = [];
+      } else if (transition === "reset") {
+        hoverRemap = "reset";
+        gesture.lastCellIndex = null;
+        gesture.visitedCellIndices.clear();
+        gesture.id = currentProject.projectId;
+        gesture.rows = currentProject.rows;
+        gesture.cols = currentProject.columns;
+        gesture.batch = [];
+      }
+    }
+
+    const prevHoverGrid = hoverGridRef.current;
+    if (
+      prevHoverGrid !== null &&
+      (prevHoverGrid[0] !== currentProject.projectId ||
+        prevHoverGrid[1] !== currentProject.rows ||
+        prevHoverGrid[2] !== currentProject.columns) &&
+      hoveredCellRef.current !== null
+    ) {
+      hoveredCellRef.current =
+        hoverRemap !== null && hoverRemap !== "reset"
+          ? remapCellIndexWithOffsets(
+              hoverRemap[2],
+              hoverRemap[3],
+              currentProject.rows,
+              currentProject.columns,
+              hoverRemap[0],
+              hoverRemap[1],
+              hoveredCellRef.current,
+            )
+          : null;
+      try {
+        controllerRef.current?.setHoveredCell(hoveredCellRef.current);
+      } catch {
+        reportUnavailableRef.current();
+      }
+    }
+    hoverGridRef.current = [
+      currentProject.projectId,
+      currentProject.rows,
+      currentProject.columns,
+    ];
+  };
+
   useLayoutEffect(() => {
     if (unavailable || !supportsThreePreview) return;
     const controller = controllerRef.current;
     if (controller === null) return;
+    syncGestureToProject(project);
     if (
       hoveredCellRef.current !== null &&
       !(editGestureRef.current !== null && activeTool === "erase")
@@ -678,17 +771,22 @@ export function BeadThreePreview({
     if (!startsEdit) return;
 
     interceptEditPointer(event);
-    strokeSequenceRef.current += 1;
+    const currentProject = projectRef.current;
+    syncGestureToProject(currentProject);
     const canvasRect = event.currentTarget.getBoundingClientRect();
     const gesture: ActiveEditGesture = {
       pointerId: event.pointerId,
-      strokeId: `three-stroke-${strokeSequenceRef.current}`,
+      strokeId: createBeadStrokeId("t"),
       startClientX: event.clientX,
       startClientY: event.clientY,
       allowDrag: allowDragRef.current,
       movedBeyondClickThreshold: false,
       lastCellIndex: null,
       visitedCellIndices: new Set<number>(),
+      id: currentProject.projectId,
+      rows: currentProject.rows,
+      cols: currentProject.columns,
+      batch: [],
       canvasRect:
         canvasRect.width > 0 && canvasRect.height > 0 ? canvasRect : undefined,
     };
@@ -713,16 +811,16 @@ export function BeadThreePreview({
     if (onPickCellsRef.current) {
       const effectiveSize: BeadBrushSize =
         activeToolRef.current === "erase" ? brushSizeRef.current : 1;
-      onPickCellsRef.current(
-        expandBrushFootprint(
-          projectRef.current.rows,
-          projectRef.current.columns,
-          cellIndex,
-          effectiveSize,
-        ),
-        gesture.strokeId,
+      const footprint = expandBrushFootprint(
+        currentProject.rows,
+        currentProject.columns,
+        cellIndex,
+        effectiveSize,
       );
+      gesture.batch = footprint;
+      onPickCellsRef.current(footprint, gesture.strokeId);
     } else {
+      gesture.batch = [cellIndex];
       onPickCellRef.current?.(cellIndex);
     }
   };
@@ -730,6 +828,8 @@ export function BeadThreePreview({
   const handlePointerMoveCapture = (
     event: ReactPointerEvent<HTMLCanvasElement>,
   ) => {
+    const currentProject = projectRef.current;
+    syncGestureToProject(currentProject);
     const gesture = editGestureRef.current;
     if (gesture === null) {
       if (
@@ -776,7 +876,6 @@ export function BeadThreePreview({
       return;
     }
 
-    const currentProject = projectRef.current;
     const segment =
       gesture.lastCellIndex !== null
         ? interpolateGridCells(
@@ -802,22 +901,28 @@ export function BeadThreePreview({
       }
       const effectiveSize: BeadBrushSize =
         activeToolRef.current === "erase" ? brushSizeRef.current : 1;
-      controllerRef.current?.setActionOriginCell?.(stepCenters[0]!);
-      onPickCellsRef.current(
-        expandStrokeCells(
-          currentProject.rows,
-          currentProject.columns,
-          stepCenters,
-          effectiveSize,
-        ),
-        gesture.strokeId,
+      const cells = expandStrokeCells(
+        currentProject.rows,
+        currentProject.columns,
+        stepCenters,
+        effectiveSize,
       );
+      gesture.batch = cells;
+      controllerRef.current?.setActionOriginCell?.(stepCenters[0]!);
+      onPickCellsRef.current(cells, gesture.strokeId);
       return;
     }
 
+    const picked: number[] = [];
     for (const crossed of segment) {
       if (!gesture.visitedCellIndices.has(crossed)) {
         gesture.visitedCellIndices.add(crossed);
+        picked.push(crossed);
+      }
+    }
+    if (picked.length > 0) {
+      gesture.batch = picked;
+      for (const crossed of picked) {
         onPickCellRef.current?.(crossed);
       }
     }

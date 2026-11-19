@@ -43,6 +43,7 @@ export interface BeadProjectHistoryEntry {
   afterProject: BeadProject;
   /** Keeps the chosen paint color across structural canvas undo/redo. / 结构画布撤销重做时保留当前画笔颜色。 */
   preserveActivePalette?: boolean;
+  strokeId?: string;
 }
 
 export type BeadEditHistoryEntry =
@@ -469,18 +470,44 @@ function commitHistoryEntry(
   );
   const previousEntry = state.past[state.past.length - 1];
   if (
-    entry.kind === "patch" &&
     entry.strokeId !== undefined &&
-    previousEntry?.kind === "patch" &&
-    previousEntry.strokeId === entry.strokeId
+    previousEntry?.strokeId === entry.strokeId
   ) {
-    const merged = mergePatchHistoryEntries(previousEntry, entry);
-    return {
+    if (entry.kind === "patch" && previousEntry.kind === "patch") {
+      const merged = mergePatchHistoryEntries(previousEntry, entry);
+      return {
+        ...state,
+        present,
+        past: [...state.past.slice(0, -1), merged],
+        future: [],
+      };
+    }
+    const beforeProject =
+      previousEntry.kind === "project"
+        ? previousEntry.beforeProject
+        : cloneBeadProject(
+            applyHistoryEntry(state.present, previousEntry, "backward"),
+          );
+    const mergedProjectEntry: BeadProjectHistoryEntry = {
+      kind: "project",
+      beforeProject,
+      afterProject: cloneBeadProject(present),
+      ...((previousEntry.kind === "project" &&
+        previousEntry.preserveActivePalette) ||
+      (entry.kind === "project" && entry.preserveActivePalette)
+        ? { preserveActivePalette: true }
+        : {}),
+      strokeId: entry.strokeId,
+    };
+    const mergedState = {
       ...state,
       present,
-      past: [...state.past.slice(0, -1), merged],
+      past: [...state.past.slice(0, -1), mergedProjectEntry],
       future: [],
     };
+    return entry.kind === "project"
+      ? normalizeProjectHistoryState(mergedState, present, mergedProjectEntry)
+      : mergedState;
   }
   const nextState = {
     ...state,
@@ -832,23 +859,33 @@ export function beadEditorReducer(
       "forward",
     );
     let expandedProject = paintedProject;
-    let expandedFocusIndex = primaryCellIndex;
+    let addTop = 0;
+    let addLeft = 0;
     for (const index of validIndices) {
-      const expanded = expandAutoCanvasAroundCell(
-        expandedProject,
-        index,
-      );
+      const origRow = Math.floor(index / paintedProject.columns);
+      const origCol = index % paintedProject.columns;
+      const current =
+        (origRow + addTop) * expandedProject.columns + origCol + addLeft;
+      const expanded = expandAutoCanvasAroundCell(expandedProject, current);
       if (expanded.project !== expandedProject) {
+        addTop =
+          Math.floor(expanded.cellIndex / expanded.project.columns) - origRow;
+        addLeft = (expanded.cellIndex % expanded.project.columns) - origCol;
         expandedProject = expanded.project;
-        expandedFocusIndex = expanded.cellIndex;
       }
     }
     if (expandedProject !== paintedProject) {
+      const expandedFocusIndex =
+        (Math.floor(primaryCellIndex / paintedProject.columns) + addTop) *
+          expandedProject.columns +
+        (primaryCellIndex % paintedProject.columns) +
+        addLeft;
       const expandedState = commitHistoryEntry(state, {
         kind: "project",
         beforeProject: cloneBeadProject(state.present),
         afterProject: cloneBeadProject(expandedProject),
         preserveActivePalette: true,
+        ...(action.strokeId ? { strokeId: action.strokeId } : {}),
       });
       return {
         ...expandedState,
