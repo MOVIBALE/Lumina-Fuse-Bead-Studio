@@ -34,6 +34,7 @@ interface BeadMatrixCanvasProps {
   selectedCellIndex?: number | null;
   onPickCell?(cellIndex: number): void;
   onPickCells?(cellIndices: readonly number[], strokeId?: string): void;
+  onDragStateChange?(dragging: boolean): void;
   brushSize?: BeadBrushSize;
   allowDrag?: boolean;
   viewport?: BeadMatrixViewport;
@@ -197,6 +198,7 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
   selectedCellIndex = null,
   onPickCell,
   onPickCells,
+  onDragStateChange,
   brushSize = 1,
   allowDrag = true,
   viewport,
@@ -204,10 +206,35 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
 }: BeadMatrixCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const draggingRef = useRef(false);
+  const onDragStateChangeRef = useRef(onDragStateChange);
+  onDragStateChangeRef.current = onDragStateChange;
   const activeStrokeIdRef = useRef<string | undefined>(undefined);
   const strokeStateRef = useRef<
     (StrokeGridSnapshot & { last: number }) | null
   >(null);
+
+  const endDrag = () => {
+    strokeStateRef.current = null;
+    activeStrokeIdRef.current = undefined;
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    onDragStateChangeRef.current?.(false);
+  };
+
+  useEffect(() => {
+    const handleGlobalEnd = () => {
+      if (draggingRef.current) endDrag();
+    };
+    window.addEventListener("pointerup", handleGlobalEnd);
+    window.addEventListener("pointercancel", handleGlobalEnd);
+    window.addEventListener("blur", handleGlobalEnd);
+    return () => {
+      window.removeEventListener("pointerup", handleGlobalEnd);
+      window.removeEventListener("pointercancel", handleGlobalEnd);
+      window.removeEventListener("blur", handleGlobalEnd);
+      if (draggingRef.current) endDrag();
+    };
+  }, []);
   const bounds = useMemo(
     () => resolveBounds(project, viewport),
     [project, viewport],
@@ -380,12 +407,11 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
       aria-label={ariaLabel}
       onPointerDown={(event) => {
         if (!isInteractive) return;
-        draggingRef.current = false;
-        strokeStateRef.current = null;
-        activeStrokeIdRef.current = undefined;
+        endDrag();
         if (!allowDrag) return;
         activeStrokeIdRef.current = createBeadStrokeId("matrix");
         draggingRef.current = true;
+        onDragStateChangeRef.current?.(true);
         event.currentTarget.setPointerCapture?.(event.pointerId);
         pickAtPointer(event);
       }}
@@ -393,17 +419,13 @@ export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
         if (draggingRef.current) pickAtPointer(event);
       }}
       onPointerUp={(event) => {
-        draggingRef.current = false;
-        strokeStateRef.current = null;
-        activeStrokeIdRef.current = undefined;
+        endDrag();
         if (allowDrag) {
           event.currentTarget.releasePointerCapture?.(event.pointerId);
         }
       }}
       onPointerCancel={() => {
-        draggingRef.current = false;
-        strokeStateRef.current = null;
-        activeStrokeIdRef.current = undefined;
+        endDrag();
       }}
       onClick={(event) => {
         if (!isInteractive || allowDrag) return;

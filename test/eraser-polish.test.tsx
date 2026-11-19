@@ -670,4 +670,296 @@ describe("eraser brush, stroke interpolation, and single-stroke undo", () => {
     ]);
     expect(latestState.past).toHaveLength(1);
   });
+
+  it("keeps grid cells stationary under the pen during default-fit 2D auto-expand and re-fits on release", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const getRectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function mockViewportLayoutRect(this: HTMLElement) {
+        if (
+          this.getAttribute("data-testid") === "bead-canvas-viewport-surface"
+        ) {
+          return {
+            x: 0,
+            y: 0,
+            left: 0,
+            top: 0,
+            right: 1200,
+            bottom: 464,
+            width: 1200,
+            height: 464,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        const content = this.closest(
+          '[data-testid="bead-canvas-viewport-content"]',
+        ) as HTMLElement | null;
+        if (content && this.tagName === "CANVAS") {
+          const match = content.style.transform.match(
+            /translate3d\(([-\d.]+)px,\s*([-\d.]+)px,\s*0(?:px)?\)\s*scale\(([-\d.]+)\)/,
+          );
+          const tx = match ? Number(match[1]) : 0;
+          const ty = match ? Number(match[2]) : 0;
+          const scale = match ? Number(match[3]) : 1;
+          const width = parseFloat(content.style.width || "0") * scale;
+          const height = parseFloat(content.style.height || "0") * scale;
+          return {
+            x: tx,
+            y: ty,
+            left: tx,
+            top: ty,
+            right: tx + width,
+            bottom: ty + height,
+            width,
+            height,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        return {
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+
+    try {
+      const initial = createBeadProject({
+        projectId: "default-fit-stationary-pen",
+        moduleVersion: "1.0.9-dev.0",
+        now: "2026-11-19T00:00:00.000Z",
+        rows: AUTO_EXPAND_CANVAS_INITIAL_SIZE,
+        columns: AUTO_EXPAND_CANVAS_INITIAL_SIZE,
+        palette: [[37, 99, 235]],
+        canvasMode: "auto-expand",
+      });
+
+      let latestState = createBeadEditorState(initial);
+      function FitHarness() {
+        const [state, dispatch] = useReducer(beadEditorReducer, latestState);
+        latestState = state;
+        return (
+          <BeadEditorStep
+            state={state}
+            sourceRaster={null}
+            translate={t}
+            dispatch={dispatch}
+            onNewProject={vi.fn()}
+          />
+        );
+      }
+
+      render(<FitHarness />);
+      fireEvent.click(screen.getByRole("button", { name: "放大 2D 对照" }));
+      expect(
+        screen.getByRole("button", { name: "适合窗口" }),
+      ).toHaveAttribute("aria-pressed", "true");
+
+      const matrixCanvas = screen.getByRole("img", {
+        name: "拼豆平面豆格图",
+      }) as HTMLCanvasElement;
+      const initialRect = matrixCanvas.getBoundingClientRect();
+      // 384x384 fitted into 1200x464 -> left = 368px, width = 464px (14.5px per cell)
+      expect(initialRect.left).toBeCloseTo(368, 3);
+      const cellPx = initialRect.width / 32;
+      const row17Y = initialRect.top + 16.5 * cellPx;
+      const col29X = initialRect.left + 28.5 * cellPx;
+      const col30X = initialRect.left + 29.5 * cellPx;
+      const col31X = initialRect.left + 30.5 * cellPx;
+      const col32X = initialRect.left + 31.5 * cellPx;
+
+      // Drag straight across fixed screen coordinates from col 29 -> initial col 32 without chasing the canvas
+      fireEvent.pointerDown(matrixCanvas, {
+        pointerId: 1,
+        clientX: col29X,
+        clientY: row17Y,
+      });
+      fireEvent.pointerMove(matrixCanvas, {
+        pointerId: 1,
+        clientX: col30X,
+        clientY: row17Y,
+      });
+      fireEvent.pointerMove(matrixCanvas, {
+        pointerId: 1,
+        clientX: col31X,
+        clientY: row17Y,
+      });
+      expect(latestState.present.columns).toBe(40);
+      // While pointer is still pressed, existing cells must stay at their exact screen coordinates
+      expect(matrixCanvas.getBoundingClientRect().left).toBeCloseTo(368, 3);
+
+      fireEvent.pointerMove(matrixCanvas, {
+        pointerId: 1,
+        clientX: col32X,
+        clientY: row17Y,
+      });
+      expect(
+        latestState.present.cells.flatMap((c, i) =>
+          c.kind === "color" ? [i] : [],
+        ),
+      ).toEqual([
+        16 * 40 + 28,
+        16 * 40 + 29,
+        16 * 40 + 30,
+        16 * 40 + 31,
+      ]);
+
+      // Releasing the pointer now triggers the deferred fit-to-window centering (40x32 -> left = 310px)
+      fireEvent.pointerUp(matrixCanvas, {
+        pointerId: 1,
+        clientX: col32X,
+        clientY: row17Y,
+      });
+      expect(matrixCanvas.getBoundingClientRect().left).toBeCloseTo(310, 3);
+      expect(
+        screen.getByRole("button", { name: "适合窗口" }),
+      ).toHaveAttribute("aria-pressed", "true");
+
+      // Undo back to blank 32x32, then verify left-edge auto-expand also keeps existing cells stationary under pen
+      fireEvent.click(screen.getByRole("button", { name: "收起 2D 对照" }));
+      fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+      fireEvent.click(screen.getByRole("button", { name: "放大 2D 对照" }));
+
+      const leftCanvas = screen.getByRole("img", {
+        name: "拼豆平面豆格图",
+      }) as HTMLCanvasElement;
+      const leftInitialRect = leftCanvas.getBoundingClientRect();
+      const leftCellPx = leftInitialRect.width / 32;
+      const leftRowY = leftInitialRect.top + 16.5 * leftCellPx;
+      const col4X = leftInitialRect.left + 3.5 * leftCellPx;
+      const col3X = leftInitialRect.left + 2.5 * leftCellPx;
+      const col2X = leftInitialRect.left + 1.5 * leftCellPx;
+      const col1X = leftInitialRect.left + 0.5 * leftCellPx;
+
+      fireEvent.pointerDown(leftCanvas, {
+        pointerId: 2,
+        clientX: col4X,
+        clientY: leftRowY,
+      });
+      fireEvent.pointerMove(leftCanvas, {
+        pointerId: 2,
+        clientX: col3X,
+        clientY: leftRowY,
+      });
+      fireEvent.pointerMove(leftCanvas, {
+        pointerId: 2,
+        clientX: col2X,
+        clientY: leftRowY,
+      });
+      expect(latestState.present.columns).toBe(40);
+      // 8 columns added on left -> left edge shifts left by 8 * cellPx so old col 0 stays at 368px!
+      expect(
+        leftCanvas.getBoundingClientRect().left + 8 * leftCellPx,
+      ).toBeCloseTo(368, 3);
+
+      fireEvent.pointerMove(leftCanvas, {
+        pointerId: 2,
+        clientX: col1X,
+        clientY: leftRowY,
+      });
+      expect(
+        latestState.present.cells.flatMap((c, i) =>
+          c.kind === "color" ? [i] : [],
+        ),
+      ).toEqual([
+        16 * 40 + 8,
+        16 * 40 + 9,
+        16 * 40 + 10,
+        16 * 40 + 11,
+      ]);
+
+      fireEvent.pointerUp(leftCanvas, {
+        pointerId: 2,
+        clientX: col1X,
+        clientY: leftRowY,
+      });
+      expect(leftCanvas.getBoundingClientRect().left).toBeCloseTo(310, 3);
+
+      // Undo back to blank 32x32, then verify top-edge auto-expand keeps existing rows stationary under pen
+      fireEvent.click(screen.getByRole("button", { name: "收起 2D 对照" }));
+      fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+      fireEvent.click(screen.getByRole("button", { name: "放大 2D 对照" }));
+
+      const topCanvas = screen.getByRole("img", {
+        name: "拼豆平面豆格图",
+      }) as HTMLCanvasElement;
+      const topInitialRect = topCanvas.getBoundingClientRect();
+      const topCellPx = topInitialRect.height / 32;
+      const col17X = topInitialRect.left + 16.5 * topCellPx;
+      const row4Y = topInitialRect.top + 3.5 * topCellPx;
+      const row3Y = topInitialRect.top + 2.5 * topCellPx;
+      const row2Y = topInitialRect.top + 1.5 * topCellPx;
+      const row1Y = topInitialRect.top + 0.5 * topCellPx;
+
+      fireEvent.pointerDown(topCanvas, {
+        pointerId: 3,
+        clientX: col17X,
+        clientY: row4Y,
+      });
+      fireEvent.pointerMove(topCanvas, {
+        pointerId: 3,
+        clientX: col17X,
+        clientY: row3Y,
+      });
+      fireEvent.pointerMove(topCanvas, {
+        pointerId: 3,
+        clientX: col17X,
+        clientY: row2Y,
+      });
+      expect(latestState.present.rows).toBe(40);
+      expect(
+        topCanvas.getBoundingClientRect().top + 8 * topCellPx,
+      ).toBeCloseTo(topInitialRect.top, 3);
+
+      fireEvent.pointerMove(topCanvas, {
+        pointerId: 3,
+        clientX: col17X,
+        clientY: row1Y,
+      });
+      expect(
+        latestState.present.cells.flatMap((c, i) =>
+          c.kind === "color" ? [i] : [],
+        ),
+      ).toEqual([
+        8 * 32 + 16,
+        9 * 32 + 16,
+        10 * 32 + 16,
+        11 * 32 + 16,
+      ]);
+
+      fireEvent.pointerUp(topCanvas, {
+        pointerId: 3,
+        clientX: col17X,
+        clientY: row1Y,
+      });
+      expect(topCanvas.getBoundingClientRect().height).toBeCloseTo(464, 3);
+
+      // In manual 100% zoom mode, left expansion keeps existing cells pinned even after pointerUp
+      fireEvent.click(screen.getByRole("button", { name: "重置为 100%" }));
+      const manualBeforeLeft = topCanvas.getBoundingClientRect().left;
+      const manualRowY = topCanvas.getBoundingClientRect().top + 20.5 * 12;
+      fireEvent.pointerDown(topCanvas, {
+        pointerId: 4,
+        clientX: manualBeforeLeft + 1.5 * 12,
+        clientY: manualRowY,
+      });
+      fireEvent.pointerUp(topCanvas, {
+        pointerId: 4,
+        clientX: manualBeforeLeft + 1.5 * 12,
+        clientY: manualRowY,
+      });
+      expect(latestState.present.columns).toBe(40);
+      expect(topCanvas.getBoundingClientRect().left + 8 * 12).toBeCloseTo(
+        manualBeforeLeft,
+        3,
+      );
+    } finally {
+      getRectSpy.mockRestore();
+    }
+  });
 });

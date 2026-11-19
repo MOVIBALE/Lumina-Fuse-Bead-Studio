@@ -1,5 +1,5 @@
 import type { WorkshopColorLibrary } from "@lumina/workshop-sdk";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   BeadEditorAction,
@@ -8,7 +8,9 @@ import type {
 } from "../domain/editorReducer";
 import {
   expandBrushFootprint,
+  resolveStrokeGridTransition,
   type BeadBrushSize,
+  type StrokeGridSnapshot,
 } from "../domain/gridBrush";
 import { estimateBeadThicknessMm } from "../domain/beadThickness";
 import {
@@ -198,9 +200,53 @@ export function BeadEditorStep({
   const [auxiliaryView, setAuxiliaryView] =
     useState<AuxiliaryView>("matrix");
   const [auxiliaryExpanded, setAuxiliaryExpanded] = useState(false);
+  const [matrixDragging, setMatrixDragging] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [eraserSize, setEraserSize] = useState<BeadBrushSize>(1);
   const project = state.present;
+  const lastEditBatchRef = useRef<StrokeGridSnapshot | null>(null);
+  const gridOriginRef = useRef({
+    id: project.projectId,
+    rows: project.rows,
+    cols: project.columns,
+    top: 0,
+    left: 0,
+  });
+  const prevOrigin = gridOriginRef.current;
+  if (prevOrigin.id !== project.projectId) {
+    gridOriginRef.current = {
+      id: project.projectId,
+      rows: project.rows,
+      cols: project.columns,
+      top: 0,
+      left: 0,
+    };
+  } else if (
+    prevOrigin.rows !== project.rows ||
+    prevOrigin.cols !== project.columns
+  ) {
+    const pending = lastEditBatchRef.current;
+    const transition =
+      pending !== null &&
+      pending.id === prevOrigin.id &&
+      pending.rows === prevOrigin.rows &&
+      pending.cols === prevOrigin.cols
+        ? resolveStrokeGridTransition(pending, project)
+        : "reset";
+    gridOriginRef.current = {
+      id: project.projectId,
+      rows: project.rows,
+      cols: project.columns,
+      top:
+        transition !== "same" && transition !== "reset"
+          ? prevOrigin.top + transition[0]
+          : prevOrigin.top,
+      left:
+        transition !== "same" && transition !== "reset"
+          ? prevOrigin.left + transition[1]
+          : prevOrigin.left,
+    };
+  }
   const projectTitle =
     project.source?.fileName?.trim() ||
     t("workshop.bead.workspace.untitled");
@@ -306,6 +352,12 @@ export function BeadEditorStep({
             eraserSize,
           )
         : undefined;
+    lastEditBatchRef.current = {
+      id: project.projectId,
+      rows: project.rows,
+      cols: project.columns,
+      batch: cellIndices ?? [cellIndex],
+    };
     dispatch({
       type: "apply-tool",
       tool: state.activeTool,
@@ -321,6 +373,12 @@ export function BeadEditorStep({
     strokeId?: string,
   ) => {
     if (cellIndices.length === 0) return;
+    lastEditBatchRef.current = {
+      id: project.projectId,
+      rows: project.rows,
+      cols: project.columns,
+      batch: cellIndices,
+    };
     dispatch({
       type: "apply-tool",
       tool: state.activeTool,
@@ -452,6 +510,11 @@ export function BeadEditorStep({
         onPickCells={
           auxiliaryExpanded && workbenchMode === "edit"
             ? applyAtCells
+            : undefined
+        }
+        onDragStateChange={
+          auxiliaryExpanded && workbenchMode === "edit"
+            ? setMatrixDragging
             : undefined
         }
         brushSize={state.activeTool === "erase" ? eraserSize : 1}
@@ -1087,6 +1150,19 @@ export function BeadEditorStep({
                     auxiliaryView === "original" && sourceRaster
                       ? sourceRaster.height
                       : project.rows * 12
+                  }
+                  contentOriginOffset={
+                    auxiliaryView === "original"
+                      ? undefined
+                      : [
+                          gridOriginRef.current.left * 12,
+                          gridOriginRef.current.top * 12,
+                        ]
+                  }
+                  deferFit={
+                    matrixDragging &&
+                    auxiliaryView === "matrix" &&
+                    workbenchMode === "edit"
                   }
                   ariaLabel={t(
                     auxiliaryView === "original"
