@@ -7,10 +7,20 @@ import {
 } from "react";
 
 import {
+  connectedRegion,
+  type BeadEditorTool,
+} from "../domain/editorReducer";
+import {
+  expandBrushFootprint,
+  expandStrokeCells,
+  interpolateGridCells,
+  type BeadBrushSize,
+} from "../domain/gridBrush";
+import {
   buildPhysicalPreviewModel,
   type PhysicalPreviewModel,
 } from "../domain/physicalPreviewModel";
-import type { BeadProject } from "../domain/types";
+import type { BeadProject, RgbColor } from "../domain/types";
 import {
   normalizeLocale,
   translate as translateMessage,
@@ -23,6 +33,7 @@ import {
 import { BeadFusionPreview } from "./BeadFusionPreview";
 import {
   createBeadThreePreviewController,
+  type BeadHoverHighlight,
   type BeadThreePreviewController,
   type CreateBeadThreePreviewController,
 } from "./beadThreePreviewController";
@@ -34,7 +45,11 @@ export interface BeadThreePreviewProps {
   createController?: CreateBeadThreePreviewController;
   createSurfaceRenderer?: () => BeadFusionSurfaceRenderer;
   onPickCell?(cellIndex: number): void;
+  onPickCells?(cellIndices: readonly number[], strokeId?: string): void;
   allowDrag?: boolean;
+  activeTool?: BeadEditorTool;
+  brushSize?: BeadBrushSize;
+  activeColor?: RgbColor | null;
   selectedCellIndex?: number | null;
   editingEnabled?: boolean;
   translate?(key: string): string;
@@ -67,11 +82,14 @@ type ThreeInteractionMode = "edit" | "view";
 
 interface ActiveEditGesture {
   pointerId: number;
+  strokeId: string;
   startClientX: number;
   startClientY: number;
   allowDrag: boolean;
   movedBeyondClickThreshold: boolean;
+  lastCellIndex: number | null;
   visitedCellIndices: Set<number>;
+  canvasRect?: DOMRectReadOnly;
 }
 
 export function supportsBeadThreePreviewCount(beadCount: number): boolean {
@@ -98,7 +116,11 @@ export function BeadThreePreview({
   createController = createBeadThreePreviewController,
   createSurfaceRenderer,
   onPickCell,
+  onPickCells,
   allowDrag = false,
+  activeTool = "paint",
+  brushSize = 1,
+  activeColor = null,
   selectedCellIndex = null,
   editingEnabled = true,
   translate = defaultTranslate,
@@ -113,8 +135,16 @@ export function BeadThreePreview({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<BeadThreePreviewController | null>(null);
   const editGestureRef = useRef<ActiveEditGesture | null>(null);
+  const strokeSequenceRef = useRef(0);
+  const hoveredCellRef = useRef<number | null>(null);
+  const projectRef = useRef(project);
   const onPickCellRef = useRef(onPickCell);
+  const onPickCellsRef = useRef(onPickCells);
   const allowDragRef = useRef(allowDrag);
+  const activeToolRef = useRef<BeadEditorTool>(activeTool);
+  const brushSizeRef = useRef<BeadBrushSize>(brushSize);
+  const activeColorRef = useRef<RgbColor | null>(activeColor);
+  const editingEnabledRef = useRef(editingEnabled);
   const selectedCellIndexRef = useRef(selectedCellIndex);
   const interactionModeRef = useRef<ThreeInteractionMode>(interactionMode);
   const surfaceRendererRef = useRef<BeadFusionSurfaceRenderer | null>(null);
@@ -131,10 +161,105 @@ export function BeadThreePreview({
     () => undefined,
   );
   const [rendering, setRendering] = useState(true);
+  projectRef.current = project;
   onPickCellRef.current = onPickCell;
+  onPickCellsRef.current = onPickCells;
   allowDragRef.current = allowDrag;
+  activeToolRef.current = activeTool;
+  brushSizeRef.current = brushSize;
+  activeColorRef.current = activeColor;
+  editingEnabledRef.current = editingEnabled;
   selectedCellIndexRef.current = selectedCellIndex;
   interactionModeRef.current = interactionMode;
+
+  const buildHoverHighlight = (
+    cellIndex: number | null,
+  ): BeadHoverHighlight | null => {
+    if (
+      cellIndex === null ||
+      !editingEnabledRef.current ||
+      interactionModeRef.current !== "edit"
+    ) {
+      return null;
+    }
+    const currentProject = projectRef.current;
+    if (cellIndex < 0 || cellIndex >= currentProject.cells.length) {
+      return null;
+    }
+    const tool = activeToolRef.current;
+    if (tool === "erase") {
+      const size = brushSizeRef.current;
+      const footprint = expandBrushFootprint(
+        currentProject.rows,
+        currentProject.columns,
+        cellIndex,
+        size,
+      );
+      return {
+        mode: "erase",
+        anchorCellIndex: cellIndex,
+        brushSize: size,
+        cells: footprint.map((idx) => ({
+          cellIndex: idx,
+          occupied: currentProject.cells[idx]?.kind === "color",
+        })),
+      };
+    }
+    if (tool === "eraseFill") {
+      if (currentProject.cells[cellIndex]?.kind === "color") {
+        const region = connectedRegion(currentProject, cellIndex);
+        return {
+          mode: "erase-region",
+          anchorCellIndex: cellIndex,
+          cells: region.map((idx) => ({
+            cellIndex: idx,
+            occupied: true,
+          })),
+        };
+      }
+      return {
+        mode: "erase",
+        anchorCellIndex: cellIndex,
+        brushSize: 1,
+        cells: [{ cellIndex, occupied: false }],
+      };
+    }
+    if (tool === "fill") {
+      const region = connectedRegion(currentProject, cellIndex);
+      return {
+        mode: "fill-region",
+        anchorCellIndex: cellIndex,
+        cells: region.map((idx) => ({
+          cellIndex: idx,
+          occupied: currentProject.cells[idx]?.kind === "color",
+        })),
+        accentRgb: activeColorRef.current,
+      };
+    }
+    if (tool === "paint") {
+      return {
+        mode: "paint",
+        anchorCellIndex: cellIndex,
+        cells: [
+          {
+            cellIndex,
+            occupied: currentProject.cells[cellIndex]?.kind === "color",
+          },
+        ],
+        accentRgb: activeColorRef.current,
+      };
+    }
+    return {
+      mode: "inspect",
+      anchorCellIndex: cellIndex,
+      cells: [
+        {
+          cellIndex,
+          occupied: currentProject.cells[cellIndex]?.kind === "color",
+        },
+      ],
+    };
+  };
 
   useEffect(() => {
     const nextMode: ThreeInteractionMode = editingEnabled ? "edit" : "view";
@@ -173,8 +298,10 @@ export function BeadThreePreview({
       releasePointerCapture(gesture.pointerId);
     }
     if (options.clearHover) {
+      hoveredCellRef.current = null;
       try {
         controllerRef.current?.setHoveredCell(null);
+        controllerRef.current?.setHoverHighlight?.(null);
       } catch {
         // Cleanup must still dispose a controller after WebGL context loss.
       }
@@ -402,7 +529,7 @@ export function BeadThreePreview({
       ready: false,
     };
     pendingSurfaceRenderRef.current = pendingRender;
-    setRendering(true);
+    setRendering((current) => (current ? current : true));
     const timer = window.setTimeout(() => {
       if (pendingSurfaceRenderRef.current !== pendingRender) return;
       pendingRender.ready = true;
@@ -451,9 +578,42 @@ export function BeadThreePreview({
     }
   }, [selectedCellIndex, supportsThreePreview, unavailable]);
 
-  const pickCellAt = (clientX: number, clientY: number): number | null => {
+  useLayoutEffect(() => {
+    if (unavailable || !supportsThreePreview) return;
+    const controller = controllerRef.current;
+    if (controller === null) return;
+    if (
+      hoveredCellRef.current !== null &&
+      !(editGestureRef.current !== null && activeTool === "erase")
+    ) {
+      try {
+        controller.setHoverHighlight?.(
+          buildHoverHighlight(hoveredCellRef.current),
+        );
+      } catch {
+        reportUnavailableRef.current();
+      }
+    }
+  }, [
+    project,
+    activeTool,
+    brushSize,
+    activeColor,
+    editingEnabled,
+    interactionMode,
+    supportsThreePreview,
+    unavailable,
+  ]);
+
+  const pickCellAt = (
+    clientX: number,
+    clientY: number,
+    cachedRect?: DOMRectReadOnly,
+  ): number | null => {
     try {
-      return controllerRef.current?.pickCellAt(clientX, clientY) ?? null;
+      return (
+        controllerRef.current?.pickCellAt(clientX, clientY, cachedRect) ?? null
+      );
     } catch {
       reportUnavailableRef.current();
       return null;
@@ -462,7 +622,11 @@ export function BeadThreePreview({
 
   const markHoveredCell = (cellIndex: number | null) => {
     try {
+      hoveredCellRef.current = cellIndex;
       controllerRef.current?.setHoveredCell(cellIndex);
+      controllerRef.current?.setHoverHighlight?.(
+        buildHoverHighlight(cellIndex),
+      );
     } catch {
       reportUnavailableRef.current();
     }
@@ -506,20 +670,27 @@ export function BeadThreePreview({
     const startsEdit =
       editingEnabled &&
       interactionModeRef.current === "edit" &&
-      onPickCellRef.current !== undefined &&
+      (onPickCellRef.current !== undefined ||
+        onPickCellsRef.current !== undefined) &&
       event.button === 0 &&
       !event.altKey &&
       event.isPrimary !== false;
     if (!startsEdit) return;
 
     interceptEditPointer(event);
+    strokeSequenceRef.current += 1;
+    const canvasRect = event.currentTarget.getBoundingClientRect();
     const gesture: ActiveEditGesture = {
       pointerId: event.pointerId,
+      strokeId: `three-stroke-${strokeSequenceRef.current}`,
       startClientX: event.clientX,
       startClientY: event.clientY,
       allowDrag: allowDragRef.current,
       movedBeyondClickThreshold: false,
+      lastCellIndex: null,
       visitedCellIndices: new Set<number>(),
+      canvasRect:
+        canvasRect.width > 0 && canvasRect.height > 0 ? canvasRect : undefined,
     };
     editGestureRef.current = gesture;
     try {
@@ -529,11 +700,31 @@ export function BeadThreePreview({
     }
 
     if (!gesture.allowDrag) return;
-    const cellIndex = pickCellAt(event.clientX, event.clientY);
+    const cellIndex = pickCellAt(
+      event.clientX,
+      event.clientY,
+      gesture.canvasRect,
+    );
     markHoveredCell(cellIndex);
     if (cellIndex === null) return;
+    gesture.lastCellIndex = cellIndex;
     gesture.visitedCellIndices.add(cellIndex);
-    onPickCellRef.current?.(cellIndex);
+    controllerRef.current?.setActionOriginCell?.(cellIndex);
+    if (onPickCellsRef.current) {
+      const effectiveSize: BeadBrushSize =
+        activeToolRef.current === "erase" ? brushSizeRef.current : 1;
+      onPickCellsRef.current(
+        expandBrushFootprint(
+          projectRef.current.rows,
+          projectRef.current.columns,
+          cellIndex,
+          effectiveSize,
+        ),
+        gesture.strokeId,
+      );
+    } else {
+      onPickCellRef.current?.(cellIndex);
+    }
   };
 
   const handlePointerMoveCapture = (
@@ -544,10 +735,14 @@ export function BeadThreePreview({
       if (
         interactionModeRef.current === "edit" &&
         editingEnabled &&
-        onPickCellRef.current !== undefined &&
+        (onPickCellRef.current !== undefined ||
+          onPickCellsRef.current !== undefined) &&
         event.pointerType !== "touch"
       ) {
-        markHoveredCell(pickCellAt(event.clientX, event.clientY));
+        const nextHover = pickCellAt(event.clientX, event.clientY);
+        if (nextHover !== hoveredCellRef.current) {
+          markHoveredCell(nextHover);
+        }
       }
       return;
     }
@@ -569,17 +764,63 @@ export function BeadThreePreview({
 
     interceptEditPointer(event);
     updateClickThreshold(gesture, event.clientX, event.clientY);
-    const cellIndex = pickCellAt(event.clientX, event.clientY);
-    markHoveredCell(cellIndex);
-    if (
-      !gesture.allowDrag ||
-      cellIndex === null ||
-      gesture.visitedCellIndices.has(cellIndex)
-    ) {
+    const cellIndex = pickCellAt(
+      event.clientX,
+      event.clientY,
+      gesture.canvasRect,
+    );
+    if (cellIndex !== hoveredCellRef.current) {
+      markHoveredCell(cellIndex);
+    }
+    if (!gesture.allowDrag || cellIndex === null) {
       return;
     }
-    gesture.visitedCellIndices.add(cellIndex);
-    onPickCellRef.current?.(cellIndex);
+
+    const currentProject = projectRef.current;
+    const segment =
+      gesture.lastCellIndex !== null
+        ? interpolateGridCells(
+            currentProject.rows,
+            currentProject.columns,
+            gesture.lastCellIndex,
+            cellIndex,
+          )
+        : [cellIndex];
+    const previousLast = gesture.lastCellIndex;
+    gesture.lastCellIndex = cellIndex;
+
+    if (onPickCellsRef.current) {
+      const stepCenters =
+        previousLast !== null && segment.length > 1
+          ? segment.slice(1)
+          : gesture.visitedCellIndices.has(cellIndex)
+            ? []
+            : [cellIndex];
+      if (stepCenters.length === 0) return;
+      for (const center of stepCenters) {
+        gesture.visitedCellIndices.add(center);
+      }
+      const effectiveSize: BeadBrushSize =
+        activeToolRef.current === "erase" ? brushSizeRef.current : 1;
+      controllerRef.current?.setActionOriginCell?.(stepCenters[0]!);
+      onPickCellsRef.current(
+        expandStrokeCells(
+          currentProject.rows,
+          currentProject.columns,
+          stepCenters,
+          effectiveSize,
+        ),
+        gesture.strokeId,
+      );
+      return;
+    }
+
+    for (const crossed of segment) {
+      if (!gesture.visitedCellIndices.has(crossed)) {
+        gesture.visitedCellIndices.add(crossed);
+        onPickCellRef.current?.(crossed);
+      }
+    }
   };
 
   const handlePointerUpCapture = (
@@ -593,7 +834,14 @@ export function BeadThreePreview({
     if (!gesture.allowDrag && !gesture.movedBeyondClickThreshold) {
       const cellIndex = pickCellAt(event.clientX, event.clientY);
       markHoveredCell(cellIndex);
-      if (cellIndex !== null) onPickCellRef.current?.(cellIndex);
+      if (cellIndex !== null) {
+        controllerRef.current?.setActionOriginCell?.(cellIndex);
+        if (onPickCellsRef.current) {
+          onPickCellsRef.current([cellIndex]);
+        } else {
+          onPickCellRef.current?.(cellIndex);
+        }
+      }
     }
     clearEditGesture({ releaseCapture: true });
   };
@@ -636,6 +884,9 @@ export function BeadThreePreview({
       ref={containerRef}
       className={cx("bead-three-preview", className)}
       data-interaction-mode={interactionMode}
+      data-active-tool={
+        interactionMode === "edit" && editingEnabled ? activeTool : "view"
+      }
       style={{ position: "relative" }}
     >
       <canvas

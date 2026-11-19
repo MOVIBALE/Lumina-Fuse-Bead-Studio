@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -6,6 +7,12 @@ import {
   type PointerEvent,
 } from "react";
 
+import {
+  expandBrushFootprint,
+  expandStrokeCells,
+  interpolateGridCells,
+  type BeadBrushSize,
+} from "../domain/gridBrush";
 import type { BeadRenderResult } from "../domain/renderer";
 import type { BeadProject } from "../domain/types";
 import { cx } from "../ui/panelPrimitives";
@@ -22,6 +29,8 @@ interface BeadMatrixCanvasProps {
   showGrid?: boolean;
   selectedCellIndex?: number | null;
   onPickCell?(cellIndex: number): void;
+  onPickCells?(cellIndices: readonly number[], strokeId?: string): void;
+  brushSize?: BeadBrushSize;
   allowDrag?: boolean;
   viewport?: BeadMatrixViewport;
   className?: string;
@@ -80,48 +89,85 @@ function drawMatrix(
   showGrid: boolean,
   selectedCellIndex: number | null,
 ): void {
+  const paletteCss = project.palette.map(
+    (color) => `rgb(${color[0]} ${color[1]} ${color[2]})`,
+  );
+  const emptyCrossCoords: number[] = [];
+  let selectedX = -1;
+  let selectedY = -1;
+
   for (let row = bounds.startRow; row < bounds.endRow; row += 1) {
+    const y = (row - bounds.startRow) * scale;
+    const rowOffset = row * project.columns;
     for (
       let column = bounds.startColumn;
       column < bounds.endColumn;
       column += 1
     ) {
-      const cellIndex = row * project.columns + column;
+      const cellIndex = rowOffset + column;
       const cell = project.cells[cellIndex];
       const x = (column - bounds.startColumn) * scale;
-      const y = (row - bounds.startRow) * scale;
       if (cell.kind === "color") {
-        const color = project.palette[cell.paletteIndex];
-        context.fillStyle = `rgb(${color[0]} ${color[1]} ${color[2]})`;
+        context.fillStyle = paletteCss[cell.paletteIndex] ?? "rgb(0 0 0)";
         context.fillRect(x, y, scale, scale);
       } else {
-        context.fillStyle = "rgba(14, 165, 233, 0.18)";
+        context.fillStyle = "rgba(148, 163, 184, 0.14)";
         context.fillRect(x, y, scale, scale);
-        context.strokeStyle = "rgba(14, 165, 233, 0.82)";
-        context.lineWidth = Math.max(1, scale / 12);
-        context.beginPath();
-        context.moveTo(x + scale * 0.2, y + scale * 0.2);
-        context.lineTo(x + scale * 0.8, y + scale * 0.8);
-        context.moveTo(x + scale * 0.8, y + scale * 0.2);
-        context.lineTo(x + scale * 0.2, y + scale * 0.8);
-        context.stroke();
-      }
-      if (showGrid) {
-        context.strokeStyle = "rgba(100, 116, 139, 0.42)";
-        context.lineWidth = 1;
-        context.strokeRect(x + 0.5, y + 0.5, scale - 1, scale - 1);
+        emptyCrossCoords.push(x, y);
       }
       if (cellIndex === selectedCellIndex) {
-        context.strokeStyle = "rgb(37 99 235)";
-        context.lineWidth = Math.max(2, scale / 8);
-        context.strokeRect(
-          x + context.lineWidth / 2,
-          y + context.lineWidth / 2,
-          scale - context.lineWidth,
-          scale - context.lineWidth,
-        );
+        selectedX = x;
+        selectedY = y;
       }
     }
+  }
+
+  if (emptyCrossCoords.length > 0) {
+    context.strokeStyle = "rgba(100, 116, 139, 0.45)";
+    context.lineWidth = Math.max(1, scale / 14);
+    context.beginPath();
+    const minOff = scale * 0.38;
+    const maxOff = scale * 0.62;
+    const midOff = scale * 0.5;
+    for (let i = 0; i < emptyCrossCoords.length; i += 2) {
+      const x = emptyCrossCoords[i]!;
+      const y = emptyCrossCoords[i + 1]!;
+      context.moveTo(x + minOff, y + midOff);
+      context.lineTo(x + maxOff, y + midOff);
+      context.moveTo(x + midOff, y + minOff);
+      context.lineTo(x + midOff, y + maxOff);
+    }
+    context.stroke();
+  }
+
+  if (showGrid) {
+    const totalWidth = (bounds.endColumn - bounds.startColumn) * scale;
+    const totalHeight = (bounds.endRow - bounds.startRow) * scale;
+    context.strokeStyle = "rgba(100, 116, 139, 0.42)";
+    context.lineWidth = 1;
+    context.beginPath();
+    for (let c = 0; c <= bounds.endColumn - bounds.startColumn; c += 1) {
+      const gx = c * scale === totalWidth ? totalWidth - 0.5 : c * scale + 0.5;
+      context.moveTo(gx, 0);
+      context.lineTo(gx, totalHeight);
+    }
+    for (let r = 0; r <= bounds.endRow - bounds.startRow; r += 1) {
+      const gy = r * scale === totalHeight ? totalHeight - 0.5 : r * scale + 0.5;
+      context.moveTo(0, gy);
+      context.lineTo(totalWidth, gy);
+    }
+    context.stroke();
+  }
+
+  if (selectedX >= 0 && selectedY >= 0) {
+    context.strokeStyle = "rgb(37 99 235)";
+    context.lineWidth = Math.max(2, scale / 8);
+    context.strokeRect(
+      selectedX + context.lineWidth / 2,
+      selectedY + context.lineWidth / 2,
+      scale - context.lineWidth,
+      scale - context.lineWidth,
+    );
   }
 }
 
@@ -139,19 +185,23 @@ function drawPressure(
   );
 }
 
-export function BeadMatrixCanvas({
+export const BeadMatrixCanvas = memo(function BeadMatrixCanvas({
   project,
   ariaLabel,
   renderResult = null,
   showGrid = true,
   selectedCellIndex = null,
   onPickCell,
+  onPickCells,
+  brushSize = 1,
   allowDrag = true,
   viewport,
   className,
 }: BeadMatrixCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const draggingRef = useRef(false);
+  const strokeSeqRef = useRef(0);
+  const activeStrokeIdRef = useRef<string | undefined>(undefined);
   const lastPickedCellRef = useRef<number | null>(null);
   const bounds = useMemo(
     () => resolveBounds(project, viewport),
@@ -166,8 +216,10 @@ export function BeadMatrixCanvas({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    canvas.width = visibleColumns * scale;
-    canvas.height = visibleRows * scale;
+    const nextWidth = visibleColumns * scale;
+    const nextHeight = visibleRows * scale;
+    if (canvas.width !== nextWidth) canvas.width = nextWidth;
+    if (canvas.height !== nextHeight) canvas.height = nextHeight;
     const context = canvas.getContext("2d");
     if (!context) return;
     context.imageSmoothingEnabled = false;
@@ -196,12 +248,14 @@ export function BeadMatrixCanvas({
     visibleRows,
   ]);
 
+  const isInteractive = Boolean(onPickCell || onPickCells);
+
   const cellIndexAtPointer = (
     event:
       | PointerEvent<HTMLCanvasElement>
       | MouseEvent<HTMLCanvasElement>,
   ): number | null => {
-    if (!onPickCell) return null;
+    if (!isInteractive) return null;
     const rectangle = event.currentTarget.getBoundingClientRect();
     if (
       rectangle.width <= 0 ||
@@ -246,8 +300,34 @@ export function BeadMatrixCanvas({
     ) {
       return;
     }
+    const previous = lastPickedCellRef.current;
     lastPickedCellRef.current = cellIndex;
-    onPickCell?.(cellIndex);
+    const segment =
+      previous !== null && allowDrag
+        ? interpolateGridCells(
+            project.rows,
+            project.columns,
+            previous,
+            cellIndex,
+          ).slice(1)
+        : [cellIndex];
+    if (segment.length === 0) return;
+
+    if (onPickCells) {
+      const cells = allowDrag
+        ? expandStrokeCells(project.rows, project.columns, segment, brushSize)
+        : expandBrushFootprint(
+            project.rows,
+            project.columns,
+            cellIndex,
+            brushSize,
+          );
+      onPickCells(cells, activeStrokeIdRef.current);
+      return;
+    }
+    for (const crossed of segment) {
+      onPickCell?.(crossed);
+    }
   };
 
   return (
@@ -256,10 +336,13 @@ export function BeadMatrixCanvas({
       role="img"
       aria-label={ariaLabel}
       onPointerDown={(event) => {
-        if (!onPickCell) return;
+        if (!isInteractive) return;
         draggingRef.current = false;
         lastPickedCellRef.current = null;
+        activeStrokeIdRef.current = undefined;
         if (!allowDrag) return;
+        strokeSeqRef.current += 1;
+        activeStrokeIdRef.current = `matrix-stroke-${strokeSeqRef.current}`;
         draggingRef.current = true;
         event.currentTarget.setPointerCapture?.(event.pointerId);
         pickAtPointer(event);
@@ -270,6 +353,7 @@ export function BeadMatrixCanvas({
       onPointerUp={(event) => {
         draggingRef.current = false;
         lastPickedCellRef.current = null;
+        activeStrokeIdRef.current = undefined;
         if (allowDrag) {
           event.currentTarget.releasePointerCapture?.(event.pointerId);
         }
@@ -277,19 +361,21 @@ export function BeadMatrixCanvas({
       onPointerCancel={() => {
         draggingRef.current = false;
         lastPickedCellRef.current = null;
+        activeStrokeIdRef.current = undefined;
       }}
       onClick={(event) => {
-        if (!onPickCell || allowDrag) return;
+        if (!isInteractive || allowDrag) return;
         lastPickedCellRef.current = null;
+        activeStrokeIdRef.current = undefined;
         pickAtPointer(event);
         lastPickedCellRef.current = null;
       }}
       className={cx(
         "bead-canvas",
         "bead-canvas--matrix",
-        onPickCell && "bead-canvas--interactive",
+        isInteractive && "bead-canvas--interactive",
         className,
       )}
     />
   );
-}
+});

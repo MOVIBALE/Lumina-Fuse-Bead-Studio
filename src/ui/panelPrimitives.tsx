@@ -9,6 +9,7 @@ export function cx(
 export const workstationFieldLabelClass = "field-label";
 export const workstationInputClass = "field-input";
 export const mutedSectionCardClass = "panel panel--muted";
+export const settingsWellClass = "settings-well";
 
 export function resolveSectionCardClass(
   tone: "standard" | "muted" = "standard",
@@ -21,6 +22,7 @@ interface PanelIntroProps {
   title: string;
   description?: string;
   action?: ReactNode;
+  badge?: ReactNode;
 }
 
 export function PanelIntro({
@@ -28,14 +30,18 @@ export function PanelIntro({
   title,
   description,
   action,
+  badge,
 }: PanelIntroProps) {
   return (
     <header className="panel-intro">
       <div className="panel-intro__copy">
-        {eyebrow ? (
-          <p className="panel-intro__eyebrow">{eyebrow}</p>
-        ) : null}
-        <h1>{title}</h1>
+        <div className="panel-intro__heading-row">
+          <h1>{title}</h1>
+          {eyebrow ? (
+            <span className="panel-intro__eyebrow">{eyebrow}</span>
+          ) : null}
+          {badge}
+        </div>
         {description ? (
           <p className="panel-intro__description">{description}</p>
         ) : null}
@@ -47,16 +53,18 @@ export function PanelIntro({
 
 interface StatusBannerProps {
   tone?: "info" | "warning" | "error" | "success";
+  className?: string;
   children: ReactNode;
 }
 
 export function StatusBanner({
   tone = "info",
+  className,
   children,
 }: StatusBannerProps) {
   return (
     <div
-      className={`status-banner status-banner--${tone}`}
+      className={cx("status-banner", `status-banner--${tone}`, className)}
       role={tone === "error" ? "alert" : "status"}
     >
       {children}

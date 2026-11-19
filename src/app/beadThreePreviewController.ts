@@ -1,6 +1,9 @@
 import {
+  ACESFilmicToneMapping,
   AmbientLight,
+  BufferAttribute,
   BufferGeometry,
+  Color,
   CylinderGeometry,
   DataTexture,
   DirectionalLight,
@@ -8,17 +11,23 @@ import {
   DynamicDrawUsage,
   ExtrudeGeometry,
   InstancedMesh,
+  LinearFilter,
   LineBasicMaterial,
   LineLoop,
+  Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshPhysicalMaterial,
+  MeshStandardMaterial,
   MOUSE,
   NearestFilter,
   Object3D,
   Plane,
   PerspectiveCamera,
+  Quaternion,
   Raycaster,
   RedFormat,
+  RGBAFormat,
   Scene,
   SRGBColorSpace,
   UnsignedByteType,
@@ -46,6 +55,17 @@ import {
 } from "../domain/physicalPreviewModel";
 import type { BeadProject } from "../domain/types";
 
+export interface BeadHoverHighlight {
+  mode: "paint" | "erase" | "erase-region" | "fill-region" | "inspect";
+  anchorCellIndex: number | null;
+  brushSize?: 1 | 2 | 3;
+  cells: ReadonlyArray<{
+    cellIndex: number;
+    occupied: boolean;
+  }>;
+  accentRgb?: readonly [number, number, number] | null;
+}
+
 export interface BeadThreePreviewController {
   /**
    * Publishes the next browser-side project preview. Revisions must be
@@ -67,9 +87,15 @@ export interface BeadThreePreviewController {
    * 单参数旧式调用仅用于迁移期兼容。
    */
   update(model: PhysicalPreviewModel, revision?: number): void;
-  pickCellAt(clientX: number, clientY: number): number | null;
+  pickCellAt(
+    clientX: number,
+    clientY: number,
+    cachedRect?: DOMRectReadOnly,
+  ): number | null;
   setSelectedCell(cellIndex: number | null): void;
   setHoveredCell(cellIndex: number | null): void;
+  setHoverHighlight?(highlight: BeadHoverHighlight | null): void;
+  setActionOriginCell?(cellIndex: number | null): void;
   resize(width: number, height: number, pixelRatio: number): void;
   zoomIn(): void;
   zoomOut(): void;
@@ -88,10 +114,63 @@ const DEFAULT_VIEW_DIRECTION = new Vector3(0, 1, 0);
 const DEFAULT_CAMERA_UP = new Vector3(0, 0, -1);
 const ZOOM_IN_FACTOR = 0.8;
 const ZOOM_OUT_FACTOR = 1 / ZOOM_IN_FACTOR;
-const BOARD_COLOR = 0xe6edf3;
-const PEG_COLOR = 0xd5e0e8;
-const HOVER_MARKER_COLOR = 0xffffff;
+const BOARD_COLOR = 0xeef3f8;
+const PEG_COLOR = 0xd4dfec;
+const HOVER_MARKER_COLOR = 0x2563eb;
+const ERASE_MARKER_COLOR = 0xe11d48;
 const SELECTED_MARKER_COLOR = 0x2f7cff;
+const HIGHLIGHT_IDENTITY_ROTATION = new Quaternion();
+const ERASE_TRAIL_MS = 280;
+const MAX_ERASE_TRAIL_CELLS = 72;
+
+function createShadowQuadGeometry(width: number, depth: number): BufferGeometry {
+  const hw = width / 2;
+  const hd = depth / 2;
+  const geometry = new BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new BufferAttribute(
+      new Float32Array([
+        -hw, 0, -hd,
+        -hw, 0, hd,
+        hw, 0, hd,
+        -hw, 0, -hd,
+        hw, 0, hd,
+        hw, 0, -hd,
+      ]),
+      3,
+    ),
+  );
+  geometry.setAttribute(
+    "uv",
+    new BufferAttribute(
+      new Float32Array([0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0]),
+      2,
+    ),
+  );
+  return geometry;
+}
+
+function createHighlightDiscGeometry(radius: number, segments: number): BufferGeometry {
+  const positions = new Float32Array(segments * 3 * 3);
+  let offset = 0;
+  for (let i = 0; i < segments; i += 1) {
+    const a0 = (i / segments) * Math.PI * 2;
+    const a1 = ((i + 1) / segments) * Math.PI * 2;
+    positions[offset++] = 0;
+    positions[offset++] = 0;
+    positions[offset++] = 0;
+    positions[offset++] = Math.cos(a0) * radius;
+    positions[offset++] = 0;
+    positions[offset++] = Math.sin(a0) * radius;
+    positions[offset++] = Math.cos(a1) * radius;
+    positions[offset++] = 0;
+    positions[offset++] = Math.sin(a1) * radius;
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  return geometry;
+}
 
 function createCellMarker(name: string, color: number): LineLoop {
   const geometry = new BufferGeometry().setFromPoints([
@@ -272,6 +351,8 @@ class ThreeBeadPreviewController implements BeadThreePreviewController {
     SELECTED_MARKER_COLOR,
   );
   private boardMesh: Mesh | null = null;
+  private boardShadowMesh: Mesh | null = null;
+  private boardShadowTexture: DataTexture | null = null;
   private pegMesh: InstancedMesh | null = null;
   private surfaceMeshes: Mesh[] = [];
   private fastLayer: BeadFastPreviewLayer;
@@ -312,6 +393,22 @@ class ThreeBeadPreviewController implements BeadThreePreviewController {
   private markerY = 0;
   private hoveredCellIndex: number | null = null;
   private selectedCellIndex: number | null = null;
+  private hoverHighlight: BeadHoverHighlight | null = null;
+  private hoverHighlightMesh: InstancedMesh<
+    BufferGeometry,
+    MeshBasicMaterial
+  > | null = null;
+  private hoverHighlightCapacity = 0;
+  private hoverColorDynamic = false;
+  private readonly highlightMatrix = new Matrix4();
+  private readonly highlightPosition = new Vector3();
+  private readonly highlightScale = new Vector3();
+  private readonly highlightColor = new Color();
+  private readonly eraseTrail = new Map<
+    number,
+    { timestamp: number | null; occupied: boolean }
+  >();
+  private readonly eraseActiveOccupied = new Set<number>();
   private animationFrame: number | null = null;
   private disposed = false;
   private unavailable = false;
@@ -327,15 +424,17 @@ class ThreeBeadPreviewController implements BeadThreePreviewController {
       powerPreference: "high-performance",
     });
     this.renderer.outputColorSpace = SRGBColorSpace;
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.24;
     this.renderer.setClearColor(0x000000, 0);
     this.camera.up.copy(DEFAULT_CAMERA_UP);
 
-    this.scene.add(new AmbientLight(0xffffff, 1.35));
-    const keyLight = new DirectionalLight(0xffffff, 2.7);
-    keyLight.position.set(-35, 55, 40);
+    this.scene.add(new AmbientLight(0xf6f9ff, 1.15));
+    const keyLight = new DirectionalLight(0xfffcf6, 2.35);
+    keyLight.position.set(-34, 56, 36);
     this.scene.add(keyLight);
-    const fillLight = new DirectionalLight(0xbfd8ff, 1.05);
-    fillLight.position.set(40, 25, -30);
+    const fillLight = new DirectionalLight(0xb8d4ff, 1.0);
+    fillLight.position.set(42, 24, -34);
     this.scene.add(fillLight);
     this.scene.add(this.hoverMarker, this.selectedMarker);
 
@@ -422,11 +521,23 @@ class ThreeBeadPreviewController implements BeadThreePreviewController {
     rows: number,
     columns: number,
   ): void {
+    const nextColumns = Math.max(0, columns);
+    const nextRows = Math.max(0, rows);
+    const editPlaneY = Math.max(model.heightMm, model.board.pegHeightMm);
+    const nextMarkerY = editPlaneY + Math.max(0.02, model.beadPitchMm * 0.015);
+    const layoutChanged =
+      this.logicalWidthMm !== model.widthMm ||
+      this.logicalDepthMm !== model.depthMm ||
+      this.logicalPitchMm !== model.beadPitchMm ||
+      this.logicalColumns !== nextColumns ||
+      this.logicalRows !== nextRows ||
+      this.markerY !== nextMarkerY;
+
     this.logicalWidthMm = model.widthMm;
     this.logicalDepthMm = model.depthMm;
     this.logicalPitchMm = model.beadPitchMm;
-    this.logicalColumns = Math.max(0, columns);
-    this.logicalRows = Math.max(0, rows);
+    this.logicalColumns = nextColumns;
+    this.logicalRows = nextRows;
     this.ensureExactEditMask(
       this.logicalRows,
       this.logicalColumns,
@@ -434,11 +545,13 @@ class ThreeBeadPreviewController implements BeadThreePreviewController {
       model.depthMm,
       model.beadPitchMm,
     );
-    const editPlaneY = Math.max(model.heightMm, model.board.pegHeightMm);
     this.editPlane.constant = -editPlaneY;
-    this.markerY = editPlaneY + Math.max(0.02, model.beadPitchMm * 0.015);
-    this.updateMarker(this.hoverMarker, this.hoveredCellIndex);
-    this.updateMarker(this.selectedMarker, this.selectedCellIndex);
+    this.markerY = nextMarkerY;
+    if (layoutChanged) {
+      this.updateMarker(this.hoverMarker, this.hoveredCellIndex);
+      this.updateMarker(this.selectedMarker, this.selectedCellIndex);
+      this.syncHoverHighlight();
+    }
 
     const nextBoardKey = boardKey(model);
     if (nextBoardKey !== this.currentBoardKey) {
@@ -621,7 +734,11 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
     this.exactEditMaskColumns = 0;
   }
 
-  pickCellAt(clientX: number, clientY: number): number | null {
+  pickCellAt(
+    clientX: number,
+    clientY: number,
+    cachedRect?: DOMRectReadOnly,
+  ): number | null {
     if (
       this.disposed ||
       this.unavailable ||
@@ -635,7 +752,7 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
     ) {
       return null;
     }
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = cachedRect ?? this.canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
 
     this.pointerNdc.set(
@@ -681,8 +798,29 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
 
   setHoveredCell(cellIndex: number | null): void {
     this.hoveredCellIndex = cellIndex;
-    this.updateMarker(this.hoverMarker, cellIndex);
+    if (cellIndex === null) {
+      this.recordEraseTrailFromPrevious(null);
+      this.hoverHighlight = null;
+      this.updateMarker(this.hoverMarker, null);
+      this.syncHoverHighlight();
+      this.scheduleRender();
+      return;
+    }
+    if (this.hoverHighlight === null) {
+      this.updateMarker(this.hoverMarker, cellIndex);
+      this.scheduleRender();
+    }
+  }
+
+  setHoverHighlight(highlight: BeadHoverHighlight | null): void {
+    this.recordEraseTrailFromPrevious(highlight);
+    this.hoverHighlight = highlight;
+    this.syncHoverHighlight();
     this.scheduleRender();
+  }
+
+  setActionOriginCell(cellIndex: number | null): void {
+    this.fastLayer.setActionOriginCell?.(cellIndex);
   }
 
   resize(width: number, height: number, pixelRatio: number): void {
@@ -746,6 +884,9 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
     this.disposeBoard();
     this.disposeSurfaces();
     this.disposeExactEditMask();
+    this.eraseTrail.clear();
+    this.eraseActiveOccupied.clear();
+    this.disposeHoverHighlightMesh();
     this.disposeMarker(this.hoverMarker);
     this.disposeMarker(this.selectedMarker);
     this.renderer.dispose();
@@ -870,11 +1011,414 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
     }
   }
 
+  private ensureHoverHighlightMesh(
+    requiredCapacity: number,
+  ): InstancedMesh<BufferGeometry, MeshBasicMaterial> {
+    if (
+      this.hoverHighlightMesh !== null &&
+      this.hoverHighlightCapacity >= requiredCapacity
+    ) {
+      return this.hoverHighlightMesh;
+    }
+    this.disposeHoverHighlightMesh();
+    const capacity = Math.max(requiredCapacity, this.logicalRows * this.logicalColumns, 16);
+    const geometry = createHighlightDiscGeometry(0.5, 16);
+    const material = new MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.36,
+      depthTest: false,
+      depthWrite: false,
+      side: DoubleSide,
+    });
+    const mesh = new InstancedMesh(geometry, material, capacity);
+    mesh.name = "bead-preview-hover-highlight";
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 9;
+    mesh.count = 0;
+    mesh.visible = false;
+    this.scene.add(mesh);
+    this.hoverHighlightMesh = mesh;
+    this.hoverHighlightCapacity = capacity;
+    this.hoverColorDynamic = false;
+    return mesh;
+  }
+
+  private recordEraseTrailFromPrevious(
+    nextHighlight: BeadHoverHighlight | null,
+  ): void {
+    if (this.reduceMotion) {
+      this.eraseTrail.clear();
+      this.eraseActiveOccupied.clear();
+      return;
+    }
+
+    if (nextHighlight !== null && nextHighlight.mode !== "erase") {
+      this.eraseTrail.clear();
+      this.eraseActiveOccupied.clear();
+      return;
+    }
+
+    if (nextHighlight !== null && nextHighlight.mode === "erase") {
+      for (const item of nextHighlight.cells) {
+        if (item.occupied) {
+          this.eraseActiveOccupied.add(item.cellIndex);
+        }
+        this.eraseTrail.delete(item.cellIndex);
+      }
+    }
+
+    const prevHighlight = this.hoverHighlight;
+    if (prevHighlight !== null && prevHighlight.mode === "erase") {
+      const nextCellSet =
+        nextHighlight !== null
+          ? new Set(nextHighlight.cells.map((item) => item.cellIndex))
+          : null;
+      for (const prevItem of prevHighlight.cells) {
+        if (nextCellSet?.has(prevItem.cellIndex)) continue;
+        const wasOccupied =
+          prevItem.occupied || this.eraseActiveOccupied.has(prevItem.cellIndex);
+        this.eraseActiveOccupied.delete(prevItem.cellIndex);
+        this.eraseTrail.delete(prevItem.cellIndex);
+        this.eraseTrail.set(prevItem.cellIndex, {
+          timestamp: null,
+          occupied: wasOccupied,
+        });
+        if (this.eraseTrail.size > MAX_ERASE_TRAIL_CELLS) {
+          const oldestKey = this.eraseTrail.keys().next().value;
+          if (oldestKey !== undefined) {
+            this.eraseTrail.delete(oldestKey);
+          }
+        }
+      }
+    }
+
+    if (nextHighlight === null) {
+      this.eraseActiveOccupied.clear();
+    }
+  }
+
+  private syncHoverHighlight(timestamp?: number): void {
+    if (this.reduceMotion) {
+      this.eraseTrail.clear();
+      this.eraseActiveOccupied.clear();
+    } else if (timestamp !== undefined && this.eraseTrail.size > 0) {
+      for (const [cellIndex, entry] of this.eraseTrail) {
+        if (entry.timestamp === null || timestamp < entry.timestamp) {
+          entry.timestamp = timestamp;
+        } else if (timestamp - entry.timestamp >= ERASE_TRAIL_MS) {
+          this.eraseTrail.delete(cellIndex);
+        }
+      }
+    }
+
+    const hoverMaterial = this.hoverMarker.material as LineBasicMaterial;
+    const highlight = this.hoverHighlight;
+    if (
+      this.disposed ||
+      this.unavailable ||
+      this.logicalWidthMm === null ||
+      this.logicalDepthMm === null ||
+      this.logicalPitchMm === null ||
+      this.logicalColumns <= 0 ||
+      this.logicalRows <= 0
+    ) {
+      hoverMaterial.color.setHex(HOVER_MARKER_COLOR);
+      if (this.hoverHighlightMesh !== null) {
+        this.hoverHighlightMesh.count = 0;
+        this.hoverHighlightMesh.visible = false;
+      }
+      this.updateMarker(this.hoverMarker, this.hoveredCellIndex);
+      return;
+    }
+
+    const pitchMm = this.logicalPitchMm;
+    const totalCells = this.logicalRows * this.logicalColumns;
+    const highlightY = Math.max(0.01, this.markerY - pitchMm * 0.005);
+
+    if (highlight === null) {
+      hoverMaterial.color.setHex(HOVER_MARKER_COLOR);
+      this.updateMarker(this.hoverMarker, this.hoveredCellIndex);
+      if (this.eraseTrail.size === 0) {
+        if (this.hoverHighlightMesh !== null) {
+          this.hoverHighlightMesh.count = 0;
+          this.hoverHighlightMesh.visible = false;
+        }
+        return;
+      }
+
+      const mesh = this.ensureHoverHighlightMesh(this.eraseTrail.size);
+      mesh.material.opacity = 0.34;
+      const written = this.writeEraseTrailInstances(
+        mesh,
+        0,
+        pitchMm,
+        totalCells,
+        highlightY,
+        timestamp,
+      );
+      mesh.count = written;
+      mesh.visible = written > 0;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor !== null) {
+        if (!this.hoverColorDynamic) {
+          mesh.instanceColor.setUsage(DynamicDrawUsage);
+          this.hoverColorDynamic = true;
+        }
+        mesh.instanceColor.needsUpdate = true;
+      }
+      return;
+    }
+
+    const isEraseMode =
+      highlight.mode === "erase" || highlight.mode === "erase-region";
+    hoverMaterial.color.setHex(
+      isEraseMode ? ERASE_MARKER_COLOR : HOVER_MARKER_COLOR,
+    );
+
+    if (
+      highlight.mode === "erase" &&
+      (highlight.brushSize ?? 1) > 1 &&
+      highlight.cells.length > 0
+    ) {
+      let minRow = this.logicalRows;
+      let maxRow = -1;
+      let minCol = this.logicalColumns;
+      let maxCol = -1;
+      for (const item of highlight.cells) {
+        if (item.cellIndex < 0 || item.cellIndex >= totalCells) continue;
+        const r = Math.floor(item.cellIndex / this.logicalColumns);
+        const c = item.cellIndex % this.logicalColumns;
+        if (r < minRow) minRow = r;
+        if (r > maxRow) maxRow = r;
+        if (c < minCol) minCol = c;
+        if (c > maxCol) maxCol = c;
+      }
+      if (maxRow >= minRow && maxCol >= minCol) {
+        const spanCols = maxCol - minCol + 1;
+        const spanRows = maxRow - minRow + 1;
+        this.hoverMarker.position.set(
+          (minCol + spanCols * 0.5) * pitchMm - this.logicalWidthMm / 2,
+          this.markerY,
+          (minRow + spanRows * 0.5) * pitchMm - this.logicalDepthMm / 2,
+        );
+        this.hoverMarker.scale.set(
+          spanCols * pitchMm - pitchMm * 0.08,
+          1,
+          spanRows * pitchMm - pitchMm * 0.08,
+        );
+        this.hoverMarker.visible = true;
+      } else {
+        this.hoverMarker.visible = false;
+      }
+    } else {
+      this.updateMarker(this.hoverMarker, highlight.anchorCellIndex);
+    }
+
+    const trailCount = highlight.mode === "erase" ? this.eraseTrail.size : 0;
+    if (highlight.cells.length === 0 && trailCount === 0) {
+      if (this.hoverHighlightMesh !== null) {
+        this.hoverHighlightMesh.count = 0;
+        this.hoverHighlightMesh.visible = false;
+      }
+      return;
+    }
+
+    const mesh = this.ensureHoverHighlightMesh(
+      highlight.cells.length + trailCount,
+    );
+    mesh.material.opacity =
+      highlight.mode === "erase-region"
+        ? 0.4
+        : highlight.mode === "erase"
+          ? 0.36
+          : highlight.mode === "fill-region"
+            ? 0.32
+            : 0.28;
+
+    let written = 0;
+    for (const item of highlight.cells) {
+      if (item.cellIndex < 0 || item.cellIndex >= totalCells) continue;
+      const row = Math.floor(item.cellIndex / this.logicalColumns);
+      const column = item.cellIndex % this.logicalColumns;
+      this.highlightPosition.set(
+        (column + 0.5) * pitchMm - this.logicalWidthMm / 2,
+        highlightY,
+        (row + 0.5) * pitchMm - this.logicalDepthMm / 2,
+      );
+
+      let tileScale = pitchMm * 0.92;
+      if (isEraseMode) {
+        if (item.occupied) {
+          this.highlightColor.setRGB(0.957, 0.247, 0.369);
+          tileScale = pitchMm * 0.96;
+        } else {
+          this.highlightColor.setRGB(0.984, 0.443, 0.522);
+          tileScale = pitchMm * 0.4;
+        }
+      } else if (
+        (highlight.mode === "paint" || highlight.mode === "fill-region") &&
+        highlight.accentRgb
+      ) {
+        const [r, g, b] = highlight.accentRgb;
+        this.highlightColor.setStyle(`rgb(${r}, ${g}, ${b})`);
+        tileScale =
+          highlight.mode === "fill-region" ? pitchMm * 0.92 : pitchMm * 0.72;
+      } else {
+        this.highlightColor.setHex(HOVER_MARKER_COLOR);
+        tileScale = pitchMm * 0.58;
+      }
+
+      this.highlightScale.set(tileScale, 1, tileScale);
+      this.highlightMatrix.compose(
+        this.highlightPosition,
+        HIGHLIGHT_IDENTITY_ROTATION,
+        this.highlightScale,
+      );
+      mesh.setMatrixAt(written, this.highlightMatrix);
+      mesh.setColorAt(written, this.highlightColor);
+      written += 1;
+    }
+
+    if (highlight.mode === "erase" && this.eraseTrail.size > 0) {
+      written = this.writeEraseTrailInstances(
+        mesh,
+        written,
+        pitchMm,
+        totalCells,
+        highlightY,
+        timestamp,
+      );
+    }
+
+    mesh.count = written;
+    mesh.visible = written > 0;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor !== null) {
+      if (!this.hoverColorDynamic) {
+        mesh.instanceColor.setUsage(DynamicDrawUsage);
+        this.hoverColorDynamic = true;
+      }
+      mesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  private writeEraseTrailInstances(
+    mesh: InstancedMesh<BufferGeometry, MeshBasicMaterial>,
+    startIndex: number,
+    pitchMm: number,
+    totalCells: number,
+    highlightY: number,
+    timestamp?: number,
+  ): number {
+    if (this.logicalWidthMm === null || this.logicalDepthMm === null) {
+      return startIndex;
+    }
+    let written = startIndex;
+    for (const [cellIndex, entry] of this.eraseTrail) {
+      if (cellIndex < 0 || cellIndex >= totalCells) continue;
+      const age =
+        timestamp !== undefined && entry.timestamp !== null
+          ? Math.max(0, timestamp - entry.timestamp)
+          : 0;
+      const life = Math.max(0, 1 - age / ERASE_TRAIL_MS);
+      if (life <= 0.02) continue;
+
+      const easedLife = life * life;
+      const baseScale = entry.occupied ? pitchMm * 0.88 : pitchMm * 0.5;
+      const tileScale = baseScale * easedLife;
+      if (tileScale <= 0.02) continue;
+
+      const row = Math.floor(cellIndex / this.logicalColumns);
+      const column = cellIndex % this.logicalColumns;
+      this.highlightPosition.set(
+        (column + 0.5) * pitchMm - this.logicalWidthMm / 2,
+        highlightY,
+        (row + 0.5) * pitchMm - this.logicalDepthMm / 2,
+      );
+      const fade = 1 - life;
+      this.highlightColor.setRGB(
+        0.957 + fade * 0.035,
+        0.247 + fade * 0.396,
+        0.369 + fade * 0.317,
+      );
+      this.highlightScale.set(tileScale, 1, tileScale);
+      this.highlightMatrix.compose(
+        this.highlightPosition,
+        HIGHLIGHT_IDENTITY_ROTATION,
+        this.highlightScale,
+      );
+      mesh.setMatrixAt(written, this.highlightMatrix);
+      mesh.setColorAt(written, this.highlightColor);
+      written += 1;
+    }
+    return written;
+  }
+
+  private disposeHoverHighlightMesh(): void {
+    if (this.hoverHighlightMesh === null) return;
+    this.scene.remove(this.hoverHighlightMesh);
+    this.hoverHighlightMesh.dispose();
+    this.hoverHighlightMesh.geometry.dispose();
+    this.hoverHighlightMesh.material.dispose();
+    this.hoverHighlightMesh = null;
+    this.hoverHighlightCapacity = 0;
+  }
+
+  private createBoardShadowTexture(): DataTexture {
+    const size = 48;
+    const data = new Uint8Array(size * size * 4);
+    const halfBox = 0.78;
+    const corner = 0.12;
+    const feather = 0.22;
+    for (let y = 0; y < size; y += 1) {
+      const ny = ((y + 0.5) / size) * 2 - 1;
+      for (let x = 0; x < size; x += 1) {
+        const nx = ((x + 0.5) / size) * 2 - 1;
+        const qx = Math.max(0, Math.abs(nx) - (halfBox - corner));
+        const qy = Math.max(0, Math.abs(ny) - (halfBox - corner));
+        const dist = Math.hypot(qx, qy) - corner;
+        const t = Math.max(0, Math.min(1, 1 - Math.max(0, dist) / feather));
+        const alpha = Math.round(t * t * (3 - 2 * t) * 58);
+        const offset = (y * size + x) * 4;
+        data[offset] = 15;
+        data[offset + 1] = 23;
+        data[offset + 2] = 42;
+        data[offset + 3] = alpha;
+      }
+    }
+    const texture = new DataTexture(data, size, size, RGBAFormat, UnsignedByteType);
+    texture.minFilter = LinearFilter;
+    texture.magFilter = LinearFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
   private replaceBoard(
     model: Pick<PhysicalPreviewModel, "board">,
   ): void {
     this.disposeBoard();
     const { board } = model;
+    const shadowTexture = this.createBoardShadowTexture();
+    const shadowGeometry = createShadowQuadGeometry(
+      board.widthMm * 1.15,
+      board.depthMm * 1.15,
+    );
+    const shadowMaterial = new MeshBasicMaterial({
+      map: shadowTexture,
+      transparent: true,
+      depthWrite: false,
+      side: DoubleSide,
+    });
+    this.boardShadowTexture = shadowTexture;
+    this.boardShadowMesh = new Mesh(shadowGeometry, shadowMaterial);
+    this.boardShadowMesh.name = "bead-preview-board-shadow";
+    this.boardShadowMesh.position.y = -board.thicknessMm - 0.06;
+    this.boardShadowMesh.renderOrder = -1;
+    this.scene.add(this.boardShadowMesh);
+
     const boardGeometry = new RoundedBoxGeometry(
       board.widthMm,
       board.thicknessMm,
@@ -885,32 +1429,29 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
         board.thicknessMm * 0.46,
       ),
     );
-    const boardMaterial = new MeshPhysicalMaterial({
+    const boardMaterial = new MeshStandardMaterial({
       color: BOARD_COLOR,
-      roughness: 0.62,
+      roughness: 0.48,
       metalness: 0,
-      clearcoat: 0.08,
-      clearcoatRoughness: 0.7,
     });
     this.boardMesh = new Mesh(boardGeometry, boardMaterial);
     this.boardMesh.name = "bead-preview-board";
     this.boardMesh.position.y = -board.thicknessMm / 2;
     this.scene.add(this.boardMesh);
 
+    const pegSegments = board.pegs.length > 500 ? 8 : 10;
     const pegGeometry = new CylinderGeometry(
       board.pegRadiusMm,
       board.pegRadiusMm,
       board.pegHeightMm,
-      12,
+      pegSegments,
       1,
       false,
     );
-    const pegMaterial = new MeshPhysicalMaterial({
+    const pegMaterial = new MeshStandardMaterial({
       color: PEG_COLOR,
-      roughness: 0.56,
+      roughness: 0.48,
       metalness: 0,
-      clearcoat: 0.1,
-      clearcoatRoughness: 0.65,
     });
     this.pegMesh = new InstancedMesh(
       pegGeometry,
@@ -971,6 +1512,21 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
   }
 
   private disposeBoard(): void {
+    if (this.boardShadowMesh !== null) {
+      this.scene.remove(this.boardShadowMesh);
+      this.boardShadowMesh.geometry.dispose();
+      const material = this.boardShadowMesh.material;
+      if (Array.isArray(material)) {
+        for (const item of material) item.dispose();
+      } else {
+        material.dispose();
+      }
+      this.boardShadowMesh = null;
+    }
+    if (this.boardShadowTexture !== null) {
+      this.boardShadowTexture.dispose();
+      this.boardShadowTexture = null;
+    }
     if (this.boardMesh !== null) {
       this.scene.remove(this.boardMesh);
       this.boardMesh.geometry.dispose();
@@ -1205,11 +1761,15 @@ if (texture2D(beadEditMask, beadEditUv).r > 0.5) discard;`,
       for (const mesh of this.surfaceMeshes) mesh.visible = true;
       this.fastLayer.setVisible(false);
     }
+    if (this.eraseTrail.size > 0) {
+      this.syncHoverHighlight(timestamp);
+    }
     this.renderer.render(this.scene, this.camera);
 
     let needsAnotherFrame =
       this.pendingFastPreview !== null ||
-      this.fastLayer.hasActiveAnimations();
+      this.fastLayer.hasActiveAnimations() ||
+      this.eraseTrail.size > 0;
     if (!needsAnotherFrame && this.pendingExactModel !== null) {
       if (
         this.pendingExactModel.revision === this.latestPreviewRevision &&

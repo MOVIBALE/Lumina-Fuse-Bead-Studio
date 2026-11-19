@@ -25,7 +25,10 @@ import {
 } from "vitest";
 
 import { createBeadThreePreviewController } from "../src/app/beadThreePreviewController";
-import { BEAD_PLACEMENT_ANIMATION_MS } from "../src/app/beadFastPreviewLayer";
+import {
+  BEAD_EXIT_ANIMATION_MS,
+  BEAD_PLACEMENT_ANIMATION_MS,
+} from "../src/app/beadFastPreviewLayer";
 import { buildFastBeadPreviewModel } from "../src/domain/fastPreviewModel";
 import { buildPhysicalPreviewLayout } from "../src/domain/physicalPreviewModel";
 import type { PhysicalPreviewModel } from "../src/domain/physicalPreviewModel";
@@ -1466,11 +1469,11 @@ describe("beadThreePreviewController resource lifecycle", () => {
     controller.update(makeGridModel(1, 1), 2);
     const parse = vi.spyOn(SVGLoader.prototype, "parse");
 
-    flushFrame(10 + 219);
+    flushFrame(10 + BEAD_EXIT_ANIMATION_MS - 1);
     expect(parse).not.toHaveBeenCalled();
-    flushFrame(10 + 220);
+    flushFrame(10 + BEAD_EXIT_ANIMATION_MS);
     expect(parse).not.toHaveBeenCalled();
-    flushFrame(10 + 221);
+    flushFrame(10 + BEAD_EXIT_ANIMATION_MS + 1);
     expect(parse).toHaveBeenCalledTimes(1);
     controller.dispose();
   });
@@ -1845,6 +1848,52 @@ describe("beadThreePreviewController resource lifecycle", () => {
       MIDDLE: MOUSE.PAN,
       RIGHT: MOUSE.ROTATE,
     });
+    controller.dispose();
+  });
+
+  it("renders a tapering rose-pink eraser comet trail across swiped cells and self-terminates", () => {
+    const sceneAdd = vi.spyOn(Scene.prototype, "add");
+    const controller = createBeadThreePreviewController(
+      document.createElement("canvas"),
+      vi.fn(),
+    );
+    previewProject(controller, makeProject([RED_CELL, BLUE_CELL]), 1);
+    flushFrame(0);
+
+    controller.setHoverHighlight?.({
+      mode: "erase",
+      anchorCellIndex: 0,
+      brushSize: 1,
+      cells: [{ cellIndex: 0, occupied: true }],
+    });
+    flushFrame(10);
+    // Stationary hover does not keep scheduling extra animation frames
+    expect(pendingFrameCount()).toBe(0);
+
+    // Swipe eraser onto cell 1 -> cell 0 becomes a glowing comet trail wake
+    controller.setHoverHighlight?.({
+      mode: "erase",
+      anchorCellIndex: 1,
+      brushSize: 1,
+      cells: [{ cellIndex: 1, occupied: true }],
+    });
+    const highlightMesh = findNamedObject<InstancedMesh>(
+      sceneAdd,
+      "bead-preview-hover-highlight",
+    );
+    expect(highlightMesh.count).toBe(2);
+
+    flushFrame(100);
+    expect(pendingFrameCount()).toBe(1);
+    flushFrame(230);
+    expect(highlightMesh.count).toBe(2);
+    expect(pendingFrameCount()).toBe(1);
+
+    // After 280ms, comet wake expires and rAF loop stops cleanly
+    flushFrame(385);
+    expect(highlightMesh.count).toBe(1);
+    expect(pendingFrameCount()).toBe(0);
+
     controller.dispose();
   });
 

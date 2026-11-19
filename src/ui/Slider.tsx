@@ -1,5 +1,7 @@
 import { useId } from "react";
 
+import HelpDot from "./HelpDot";
+
 interface SliderProps {
   label: string;
   value: number;
@@ -27,12 +29,21 @@ export default function Slider({
   const progress =
     max === min ? 0 : ((value - min) / (max - min)) * 100;
   return (
-    <div className="slider" title={tooltip}>
+    <div className="slider">
       <span className="slider__header">
-        <span id={labelId} className="field-label">
-          {label}
+        <span className="label-with-help">
+          <span id={labelId} className="field-label">
+            {label}
+          </span>
+          {tooltip ? (
+            <HelpDot title={label} description={tooltip} />
+          ) : null}
         </span>
-        <output aria-live="polite" aria-atomic="true">
+        <output
+          className="slider__value"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {value}
           {unit}
         </output>

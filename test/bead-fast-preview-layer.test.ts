@@ -417,7 +417,7 @@ describe("persistent fast bead preview layer", () => {
     );
     expect(layer.hasActiveAnimations()).toBe(true);
 
-    layer.advance(startedAt + 220);
+    layer.advance(startedAt + BEAD_EXIT_ANIMATION_MS);
     expectHidden(outgoing, 0);
     expect(layer.hasActiveAnimations()).toBe(true);
 
@@ -515,7 +515,7 @@ describe("persistent fast bead preview layer", () => {
     expect(outgoing.scale.x).toBeCloseTo(current.scale.x, 6);
     expect(layer.hasActiveAnimations()).toBe(true);
 
-    layer.advance(90 + 220);
+    layer.advance(90 + BEAD_EXIT_ANIMATION_MS);
     expectHidden(outgoingMesh(scene), 0);
     expect(layer.hasActiveAnimations()).toBe(false);
   });

@@ -1,11 +1,13 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
 
+import { useModalFocus } from "../app/useModalFocus";
 import type { CropRect } from "../domain/types";
 import Button from "./Button";
 
@@ -39,6 +41,8 @@ export default function CropModal({
   onUseOriginal,
   onConfirm,
 }: CropModalProps) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const titleId = `crop-title-${useId()}`;
   const [crop, setCrop] = useState<CropRect>({
     x: 0,
     y: 0,
@@ -46,6 +50,8 @@ export default function CropModal({
     height: imageHeight,
   });
   const activeDragRef = useRef<ActiveCropDrag | null>(null);
+
+  useModalFocus({ open, busy, dialogRef, onCancel: onClose });
 
   useEffect(() => {
     const candidate = initialCrop ?? {
@@ -76,15 +82,6 @@ export default function CropModal({
     initialCrop?.y,
     open,
   ]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [busy, onClose, open]);
 
   if (!open) return null;
 
@@ -158,7 +155,7 @@ export default function CropModal({
   };
   const previewWidthVh = Math.max(
     1,
-    (imageWidth / imageHeight) * 48,
+    (imageWidth / imageHeight) * 46,
   );
 
   return createPortal(
@@ -167,85 +164,101 @@ export default function CropModal({
       onPointerDown={busy ? undefined : onClose}
     >
       <section
+        ref={dialogRef}
         className="dialog dialog--crop"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="crop-title"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="dialog__body">
-          <h2 id="crop-title">{t("crop.title")}</h2>
-          <p>{t("crop.description")}</p>
-          <div
-            className="crop-canvas"
-            role="img"
-            aria-label={t("crop.previewAria")}
-            style={{
-              aspectRatio: `${imageWidth} / ${imageHeight}`,
-              width: `min(100%, ${previewWidthVh}vh)`,
-            }}
-            onPointerDown={(event) => {
-              if (
-                busy ||
-                activeDragRef.current ||
-                event.button !== 0 ||
-                event.isPrimary === false
-              ) {
-                return;
-              }
-              const point = pointFromPointer(event);
-              if (!point) return;
-              activeDragRef.current = {
-                pointerId: pointerIdFor(event),
-                start: point,
-              };
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-              setCrop({
-                x: Math.min(point.x, Math.max(0, imageWidth - 1)),
-                y: Math.min(point.y, Math.max(0, imageHeight - 1)),
-                width: 1,
-                height: 1,
-              });
-            }}
-            onPointerMove={updateDrag}
-            onPointerUp={(event) => {
-              if (!updateDrag(event)) return;
-              activeDragRef.current = null;
-              event.currentTarget.releasePointerCapture?.(event.pointerId);
-            }}
-            onPointerCancel={(event) => {
-              if (
-                activeDragRef.current?.pointerId === pointerIdFor(event)
-              ) {
-                activeDragRef.current = null;
-              }
-            }}
-          >
-            <img
-              className="crop-preview"
-              src={imageSrc}
-              alt=""
-              draggable={false}
-            />
-            <span
-              className="crop-selection"
-              style={selectionStyle}
-              aria-hidden="true"
-            />
+          <div className="dialog__header-row">
+            <h2 id={titleId}>{t("crop.title")}</h2>
+            <span className="meta-pill">
+              {crop.width} × {crop.height} px
+            </span>
           </div>
-          <div className="field-grid field-grid--four">
-            {(["x", "y", "width", "height"] as const).map((field) => (
-              <label className="field" key={field}>
-                <span className="field-label">{t(`crop.${field}`)}</span>
-                <input
-                  className="field-input"
-                  type="number"
-                  min={0}
-                  value={crop[field]}
-                  onChange={(event) => set(field, Number(event.target.value))}
-                />
-              </label>
-            ))}
+          <p>{t("crop.description")}</p>
+          <div className="crop-stage">
+            <div
+              className="crop-canvas"
+              role="img"
+              aria-label={t("crop.previewAria")}
+              style={{
+                aspectRatio: `${imageWidth} / ${imageHeight}`,
+                width: `min(100%, ${previewWidthVh}vh)`,
+              }}
+              onPointerDown={(event) => {
+                if (
+                  busy ||
+                  activeDragRef.current ||
+                  event.button !== 0 ||
+                  event.isPrimary === false
+                ) {
+                  return;
+                }
+                const point = pointFromPointer(event);
+                if (!point) return;
+                activeDragRef.current = {
+                  pointerId: pointerIdFor(event),
+                  start: point,
+                };
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                setCrop({
+                  x: Math.min(point.x, Math.max(0, imageWidth - 1)),
+                  y: Math.min(point.y, Math.max(0, imageHeight - 1)),
+                  width: 1,
+                  height: 1,
+                });
+              }}
+              onPointerMove={updateDrag}
+              onPointerUp={(event) => {
+                if (!updateDrag(event)) return;
+                activeDragRef.current = null;
+                event.currentTarget.releasePointerCapture?.(event.pointerId);
+              }}
+              onPointerCancel={(event) => {
+                if (
+                  activeDragRef.current?.pointerId === pointerIdFor(event)
+                ) {
+                  activeDragRef.current = null;
+                }
+              }}
+            >
+              <img
+                className="crop-preview"
+                src={imageSrc}
+                alt=""
+                draggable={false}
+              />
+              <span
+                className="crop-selection"
+                style={selectionStyle}
+                aria-hidden="true"
+              >
+                <span className="crop-selection__handle crop-selection__handle--nw" />
+                <span className="crop-selection__handle crop-selection__handle--ne" />
+                <span className="crop-selection__handle crop-selection__handle--sw" />
+                <span className="crop-selection__handle crop-selection__handle--se" />
+              </span>
+            </div>
+          </div>
+          <div className="settings-well">
+            <div className="field-grid field-grid--four">
+              {(["x", "y", "width", "height"] as const).map((field) => (
+                <label className="field" key={field}>
+                  <span className="field-label">{t(`crop.${field}`)}</span>
+                  <input
+                    className="field-input field-input--card"
+                    type="number"
+                    min={0}
+                    value={crop[field]}
+                    onChange={(event) => set(field, Number(event.target.value))}
+                  />
+                </label>
+              ))}
+            </div>
           </div>
         </div>
         <footer className="dialog__footer">

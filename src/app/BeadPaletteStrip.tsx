@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef } from "react";
 
 import type { RgbColor } from "../domain/types";
 import { BeadPaletteThreePreview } from "./BeadPaletteThreePreview";
@@ -45,7 +45,7 @@ function setClampedScrollLeft(scroller: HTMLDivElement, next: number): void {
  * 横向浏览豆子色样，并将普通滚轮转换成水平导航。
  * Browses bead swatches horizontally and maps a regular wheel to that axis.
  */
-export function BeadPaletteStrip({
+export const BeadPaletteStrip = memo(function BeadPaletteStrip({
   colors,
   activeIndex,
   label,
@@ -180,4 +180,4 @@ export function BeadPaletteStrip({
       </div>
     </div>
   );
-}
+});

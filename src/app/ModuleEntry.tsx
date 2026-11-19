@@ -111,7 +111,7 @@ export function ModuleEntry({
         cleanupConnection();
         if (active) {
           setError(
-            "无法连接 Lumina 创意工坊宿主。请关闭此模块后重试。 / Unable to connect to the Lumina Workshop host.",
+            "连接 Lumina 失败，请关闭窗口重新打开试试。 / Unable to connect to the Lumina Workshop host.",
           );
         }
       }

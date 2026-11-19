@@ -5,7 +5,7 @@ import { BeadMatrixCanvas } from "../src/app/BeadMatrixCanvas";
 import { createBeadProject } from "../src/domain/project";
 
 describe("BeadMatrixCanvas", () => {
-  it("marks empty cells with the light-blue cross while white beads stay solid", () => {
+  it("marks empty cells with a calm pegboard cross while white beads stay solid", () => {
     const fills: Array<{ style: string; args: number[] }> = [];
     const strokes: Array<{
       style: string;
@@ -67,7 +67,7 @@ describe("BeadMatrixCanvas", () => {
 
     expect(fills).toEqual([
       {
-        style: "rgba(14, 165, 233, 0.18)",
+        style: "rgba(148, 163, 184, 0.14)",
         args: [0, 0, 12, 12],
       },
       {
@@ -76,12 +76,12 @@ describe("BeadMatrixCanvas", () => {
       },
     ]);
     expect(strokes).toHaveLength(1);
-    expect(strokes[0]?.style).toBe("rgba(14, 165, 233, 0.82)");
+    expect(strokes[0]?.style).toBe("rgba(100, 116, 139, 0.45)");
     const expectedPath = [
-      [2.4, 2.4],
-      [9.6, 9.6],
-      [9.6, 2.4],
-      [2.4, 9.6],
+      [4.56, 6],
+      [7.44, 6],
+      [6, 4.56],
+      [6, 7.44],
     ];
     for (const [index, point] of expectedPath.entries()) {
       expect(strokes[0]?.path[index]?.[0]).toBeCloseTo(point[0]);
