@@ -17,6 +17,8 @@ import {
 export interface BeadCanvasViewportProps {
   contentWidth: number;
   contentHeight: number;
+  contentOriginOffset?: readonly [x: number, y: number];
+  deferFit?: boolean;
   viewKey?: string;
   ariaLabel: string;
   children: ReactNode;
@@ -46,6 +48,8 @@ interface ViewLayoutIdentity {
   viewKey: string;
   contentWidth: number;
   contentHeight: number;
+  originX: number;
+  originY: number;
 }
 
 type ScaleMode = "fit" | "manual" | "preserve";
@@ -99,6 +103,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
 export function BeadCanvasViewport({
   contentWidth,
   contentHeight,
+  contentOriginOffset,
+  deferFit = false,
   viewKey = DEFAULT_VIEW_KEY,
   ariaLabel,
   children,
@@ -107,6 +113,8 @@ export function BeadCanvasViewport({
   const surfaceRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef<ViewTransform>(INITIAL_TRANSFORM);
   const isFitRef = useRef(false);
+  const deferFitRef = useRef(deferFit);
+  const pendingFitRef = useRef(false);
   const viewCacheRef = useRef(new Map<string, CachedViewState>());
   const currentViewKeyRef = useRef(viewKey);
   const contentSizeRef = useRef({ width: contentWidth, height: contentHeight });
@@ -120,6 +128,9 @@ export function BeadCanvasViewport({
   const [isPanToolActive, setIsPanToolActive] = useState(false);
 
   contentSizeRef.current = { width: contentWidth, height: contentHeight };
+  deferFitRef.current = deferFit;
+  const originX = contentOriginOffset?.[0] ?? 0;
+  const originY = contentOriginOffset?.[1] ?? 0;
 
   const commitTransform = useCallback((
     next: ViewTransform,
@@ -146,6 +157,7 @@ export function BeadCanvasViewport({
     if (surface === null) return;
     const bounds = surface.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
+    pendingFitRef.current = false;
     const safeContentWidth = Math.max(contentSizeRef.current.width, 1);
     const safeContentHeight = Math.max(contentSizeRef.current.height, 1);
     const scale = normalizeScale(
@@ -167,6 +179,7 @@ export function BeadCanvasViewport({
     if (surface === null) return;
     const bounds = surface.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
+    pendingFitRef.current = false;
     const safeContentWidth = Math.max(contentSizeRef.current.width, 1);
     const safeContentHeight = Math.max(contentSizeRef.current.height, 1);
     commitTransform({
@@ -184,6 +197,7 @@ export function BeadCanvasViewport({
       }
       const scale = clampScale(requestedScale);
       if (scale === current.scale) return;
+      pendingFitRef.current = false;
       const contentX = (pointX - current.x) / current.scale;
       const contentY = (pointY - current.y) / current.scale;
       commitTransform({
@@ -217,38 +231,78 @@ export function BeadCanvasViewport({
     currentViewKeyRef.current = viewKey;
 
     if (previousLayout === null || viewChanged) {
+      pendingFitRef.current = false;
       const cached = viewCacheRef.current.get(viewKey);
       if (cached !== undefined && !cached.isFit) {
         commitTransform(cached.transform, false, "preserve");
       } else {
         fitContent();
       }
-    } else if (contentSizeChanged && isFitRef.current) {
-      fitContent();
+    } else if (contentSizeChanged) {
+      if (isFitRef.current && !deferFit) {
+        fitContent();
+      } else {
+        if (isFitRef.current && deferFit) {
+          pendingFitRef.current = true;
+        }
+        const deltaOriginX = originX - previousLayout.originX;
+        const deltaOriginY = originY - previousLayout.originY;
+        if (deltaOriginX !== 0 || deltaOriginY !== 0) {
+          const current = transformRef.current;
+          commitTransform(
+            {
+              scale: current.scale,
+              x: current.x - deltaOriginX * current.scale,
+              y: current.y - deltaOriginY * current.scale,
+            },
+            isFitRef.current,
+            "preserve",
+          );
+        }
+      }
+    } else if (!deferFit && pendingFitRef.current) {
+      pendingFitRef.current = false;
+      if (isFitRef.current) {
+        fitContent();
+      }
     }
 
     previousLayoutRef.current = {
       viewKey,
       contentWidth,
       contentHeight,
+      originX,
+      originY,
     };
-  }, [commitTransform, contentHeight, contentWidth, fitContent, viewKey]);
+  }, [
+    commitTransform,
+    contentHeight,
+    contentWidth,
+    deferFit,
+    fitContent,
+    originX,
+    originY,
+    viewKey,
+  ]);
 
   useLayoutEffect(() => {
     const surface = surfaceRef.current;
     if (surface === null) return undefined;
+    const onResize = () => {
+      if (!isFitRef.current) return;
+      if (deferFitRef.current) {
+        pendingFitRef.current = true;
+      } else {
+        fitContent();
+      }
+    };
     if (typeof ResizeObserver === "function") {
-      const observer = new ResizeObserver(() => {
-        if (isFitRef.current) fitContent();
-      });
+      const observer = new ResizeObserver(onResize);
       observer.observe(surface);
       return () => observer.disconnect();
     }
-    const handleResize = () => {
-      if (isFitRef.current) fitContent();
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, [fitContent]);
 
   useEffect(() => {
@@ -322,6 +376,7 @@ export function BeadCanvasViewport({
       event.currentTarget.setPointerCapture(event.pointerId);
     }
     isFitRef.current = false;
+    pendingFitRef.current = false;
     viewCacheRef.current.set(currentViewKeyRef.current, {
       transform: current,
       isFit: false,

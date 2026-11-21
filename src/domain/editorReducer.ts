@@ -34,6 +34,7 @@ export interface BeadPatchHistoryEntry {
   issuePatches: BeadIssuePatch[];
   beforeUpdatedAt: string;
   afterUpdatedAt: string;
+  strokeId?: string;
 }
 
 export interface BeadProjectHistoryEntry {
@@ -42,6 +43,7 @@ export interface BeadProjectHistoryEntry {
   afterProject: BeadProject;
   /** Keeps the chosen paint color across structural canvas undo/redo. / 结构画布撤销重做时保留当前画笔颜色。 */
   preserveActivePalette?: boolean;
+  strokeId?: string;
 }
 
 export type BeadEditHistoryEntry =
@@ -63,7 +65,9 @@ export type BeadEditorAction =
       type: "apply-tool";
       tool?: BeadEditorTool;
       cellIndex: number;
+      cellIndices?: readonly number[];
       paletteIndex?: number;
+      strokeId?: string;
       updatedAt?: string;
     }
   | { type: "set-tool"; tool: BeadEditorTool }
@@ -151,7 +155,7 @@ function cellForTool(
     : null;
 }
 
-function connectedRegion(
+export function connectedRegion(
   project: BeadProject,
   startIndex: number,
 ): number[] {
@@ -190,7 +194,7 @@ function connectedRegion(
 function patchesForTool(
   project: BeadProject,
   tool: Exclude<BeadEditorTool, "eyedropper">,
-  cellIndex: number,
+  cellIndices: readonly number[],
   paletteIndex: number,
 ): BeadCellPatch[] {
   const replacement = cellForTool(
@@ -202,19 +206,24 @@ function patchesForTool(
         : tool,
     paletteIndex,
   );
-  if (!replacement) {
+  if (!replacement || cellIndices.length === 0) {
     return [];
   }
   const indices =
     tool === "fill" || tool === "eraseFill"
-      ? connectedRegion(project, cellIndex)
-      : [cellIndex];
-  return indices.flatMap((index) => {
+      ? connectedRegion(project, cellIndices[0]!)
+      : cellIndices;
+  const seen = new Set<number>();
+  const patches: BeadCellPatch[] = [];
+  for (const index of indices) {
+    if (seen.has(index)) continue;
+    seen.add(index);
     const before = project.cells[index];
-    return cellsEqual(before, replacement)
-      ? []
-      : [{ index, before, after: replacement }];
-  });
+    if (before && !cellsEqual(before, replacement)) {
+      patches.push({ index, before, after: replacement });
+    }
+  }
+  return patches;
 }
 
 function issuePatchesForCells(
@@ -391,6 +400,65 @@ function normalizeProjectHistoryState(
   };
 }
 
+function mergePatchHistoryEntries(
+  previous: BeadPatchHistoryEntry,
+  incoming: BeadPatchHistoryEntry,
+): BeadPatchHistoryEntry {
+  const cellMap = new Map<number, BeadCellPatch>();
+  for (const patch of previous.cellPatches) {
+    cellMap.set(patch.index, patch);
+  }
+  for (const patch of incoming.cellPatches) {
+    const existing = cellMap.get(patch.index);
+    if (existing) {
+      if (cellsEqual(existing.before, patch.after)) {
+        cellMap.delete(patch.index);
+      } else {
+        cellMap.set(patch.index, {
+          index: patch.index,
+          before: existing.before,
+          after: patch.after,
+        });
+      }
+    } else {
+      cellMap.set(patch.index, patch);
+    }
+  }
+
+  const issueMap = new Map<number, BeadIssuePatch>();
+  for (const patch of previous.issuePatches) {
+    issueMap.set(patch.index, patch);
+  }
+  for (const patch of incoming.issuePatches) {
+    const existing = issueMap.get(patch.index);
+    if (existing) {
+      if (existing.before === patch.after) {
+        issueMap.delete(patch.index);
+      } else {
+        issueMap.set(patch.index, {
+          index: patch.index,
+          before: existing.before,
+          after: patch.after,
+        });
+      }
+    } else {
+      issueMap.set(patch.index, patch);
+    }
+  }
+
+  return {
+    kind: "patch",
+    cellPatches: [...cellMap.values()],
+    issuePatches: [...issueMap.values()],
+    beforeUpdatedAt: previous.beforeUpdatedAt,
+    afterUpdatedAt: latestProjectUpdatedAt(
+      previous.afterUpdatedAt,
+      incoming.afterUpdatedAt,
+    ),
+    ...(previous.strokeId ? { strokeId: previous.strokeId } : {}),
+  };
+}
+
 function commitHistoryEntry(
   state: BeadEditorState,
   entry: BeadEditHistoryEntry,
@@ -400,6 +468,47 @@ function commitHistoryEntry(
     entry,
     "forward",
   );
+  const previousEntry = state.past[state.past.length - 1];
+  if (
+    entry.strokeId !== undefined &&
+    previousEntry?.strokeId === entry.strokeId
+  ) {
+    if (entry.kind === "patch" && previousEntry.kind === "patch") {
+      const merged = mergePatchHistoryEntries(previousEntry, entry);
+      return {
+        ...state,
+        present,
+        past: [...state.past.slice(0, -1), merged],
+        future: [],
+      };
+    }
+    const beforeProject =
+      previousEntry.kind === "project"
+        ? previousEntry.beforeProject
+        : cloneBeadProject(
+            applyHistoryEntry(state.present, previousEntry, "backward"),
+          );
+    const mergedProjectEntry: BeadProjectHistoryEntry = {
+      kind: "project",
+      beforeProject,
+      afterProject: cloneBeadProject(present),
+      ...((previousEntry.kind === "project" &&
+        previousEntry.preserveActivePalette) ||
+      (entry.kind === "project" && entry.preserveActivePalette)
+        ? { preserveActivePalette: true }
+        : {}),
+      strokeId: entry.strokeId,
+    };
+    const mergedState = {
+      ...state,
+      present,
+      past: [...state.past.slice(0, -1), mergedProjectEntry],
+      future: [],
+    };
+    return entry.kind === "project"
+      ? normalizeProjectHistoryState(mergedState, present, mergedProjectEntry)
+      : mergedState;
+  }
   const nextState = {
     ...state,
     present,
@@ -705,19 +814,27 @@ export function beadEditorReducer(
     });
   }
 
-  if (!isValidCellIndex(state.present, action.cellIndex)) {
+  const rawTargetIndices =
+    action.cellIndices && action.cellIndices.length > 0
+      ? action.cellIndices
+      : [action.cellIndex];
+  const validIndices = rawTargetIndices.filter((index) =>
+    isValidCellIndex(state.present, index),
+  );
+  if (validIndices.length === 0) {
     return state;
   }
+  const primaryCellIndex = validIndices[validIndices.length - 1]!;
   const tool = action.tool ?? state.activeTool;
   if (tool === "eyedropper") {
-    return applyEyedropper(state, action.cellIndex);
+    return applyEyedropper(state, validIndices[0]!);
   }
   const paletteIndex =
     action.paletteIndex ?? state.activePaletteIndex;
   const cellPatches = patchesForTool(
     state.present,
     tool,
-    action.cellIndex,
+    validIndices,
     paletteIndex,
   );
   if (cellPatches.length === 0) {
@@ -727,12 +844,13 @@ export function beadEditorReducer(
     state.present,
     new Set(cellPatches.map((patch) => patch.index)),
   );
-  const patchEntry = {
-    kind: "patch" as const,
+  const patchEntry: BeadPatchHistoryEntry = {
+    kind: "patch",
     cellPatches,
     issuePatches,
     beforeUpdatedAt: state.present.updatedAt,
     afterUpdatedAt: action.updatedAt ?? state.present.updatedAt,
+    ...(action.strokeId ? { strokeId: action.strokeId } : {}),
   };
   if (tool === "paint" && state.present.canvasMode === "auto-expand") {
     const paintedProject = applyHistoryEntry(
@@ -740,28 +858,46 @@ export function beadEditorReducer(
       patchEntry,
       "forward",
     );
-    const expanded = expandAutoCanvasAroundCell(
-      paintedProject,
-      action.cellIndex,
-    );
-    if (expanded.project !== paintedProject) {
+    let expandedProject = paintedProject;
+    let addTop = 0;
+    let addLeft = 0;
+    for (const index of validIndices) {
+      const origRow = Math.floor(index / paintedProject.columns);
+      const origCol = index % paintedProject.columns;
+      const current =
+        (origRow + addTop) * expandedProject.columns + origCol + addLeft;
+      const expanded = expandAutoCanvasAroundCell(expandedProject, current);
+      if (expanded.project !== expandedProject) {
+        addTop =
+          Math.floor(expanded.cellIndex / expanded.project.columns) - origRow;
+        addLeft = (expanded.cellIndex % expanded.project.columns) - origCol;
+        expandedProject = expanded.project;
+      }
+    }
+    if (expandedProject !== paintedProject) {
+      const expandedFocusIndex =
+        (Math.floor(primaryCellIndex / paintedProject.columns) + addTop) *
+          expandedProject.columns +
+        (primaryCellIndex % paintedProject.columns) +
+        addLeft;
       const expandedState = commitHistoryEntry(state, {
         kind: "project",
         beforeProject: cloneBeadProject(state.present),
-        afterProject: cloneBeadProject(expanded.project),
+        afterProject: cloneBeadProject(expandedProject),
         preserveActivePalette: true,
+        ...(action.strokeId ? { strokeId: action.strokeId } : {}),
       });
       return {
         ...expandedState,
         activeTool: state.activeTool,
         activePaletteIndex: state.activePaletteIndex,
-        selectedCellIndex: expanded.cellIndex,
+        selectedCellIndex: expandedFocusIndex,
         selectedIssueIndex: state.selectedIssueIndex,
       };
     }
   }
   return {
     ...commitHistoryEntry(state, patchEntry),
-    selectedCellIndex: action.cellIndex,
+    selectedCellIndex: primaryCellIndex,
   };
 }

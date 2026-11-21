@@ -15,6 +15,7 @@ interface BeadSourceCanvasProps {
   ariaLabel: string;
   pickMode?: CalibrationPickMode;
   emptyCellIndex?: number | null;
+  showGrid?: boolean;
   onPickCell?(cellIndex: number): void;
   className?: string;
 }
@@ -33,18 +34,22 @@ function drawSelection(
   geometry: BeadGridGeometry,
   columns: number,
   cellIndex: number,
-  color: string,
 ): void {
   const row = Math.floor(cellIndex / columns);
   const column = cellIndex % columns;
+  const x = geometry.originX + column * geometry.cellWidth;
+  const y = geometry.originY + row * geometry.cellHeight;
+  const w = geometry.cellWidth;
+  const h = geometry.cellHeight;
   context.save();
-  context.fillStyle = color;
-  context.fillRect(
-    geometry.originX + column * geometry.cellWidth,
-    geometry.originY + row * geometry.cellHeight,
-    geometry.cellWidth,
-    geometry.cellHeight,
-  );
+  context.fillStyle = "rgba(0, 113, 227, 0.24)";
+  context.fillRect(x, y, w, h);
+  context.lineWidth = Math.max(2, Math.min(w, h) * 0.14);
+  context.strokeStyle = "rgba(255, 255, 255, 0.96)";
+  context.strokeRect(x - 1, y - 1, w + 2, h + 2);
+  context.lineWidth = Math.max(1.5, Math.min(w, h) * 0.1);
+  context.strokeStyle = "rgb(0, 113, 227)";
+  context.strokeRect(x, y, w, h);
   context.restore();
 }
 
@@ -56,7 +61,7 @@ function drawGrid(
 ): void {
   context.save();
   context.lineWidth = 1;
-  context.strokeStyle = "rgba(37, 99, 235, 0.82)";
+  context.strokeStyle = "rgba(37, 99, 235, 0.62)";
   context.beginPath();
   for (let column = 0; column <= columns; column += 1) {
     const x = geometry.originX + column * geometry.cellWidth;
@@ -75,6 +80,24 @@ function drawGrid(
     );
   }
   context.stroke();
+
+  // Subtle 5-cell major guide lines for easier counting on large numbered grids
+  if (rows >= 10 || columns >= 10) {
+    context.lineWidth = 1.5;
+    context.strokeStyle = "rgba(0, 113, 227, 0.88)";
+    context.beginPath();
+    for (let column = 5; column < columns; column += 5) {
+      const x = geometry.originX + column * geometry.cellWidth;
+      context.moveTo(x, geometry.originY);
+      context.lineTo(x, geometry.originY + rows * geometry.cellHeight);
+    }
+    for (let row = 5; row < rows; row += 5) {
+      const y = geometry.originY + row * geometry.cellHeight;
+      context.moveTo(geometry.originX, y);
+      context.lineTo(geometry.originX + columns * geometry.cellWidth, y);
+    }
+    context.stroke();
+  }
   context.restore();
 }
 
@@ -86,6 +109,7 @@ export function BeadSourceCanvas({
   ariaLabel,
   pickMode = "none",
   emptyCellIndex = null,
+  showGrid = true,
   onPickCell,
   className,
 }: BeadSourceCanvasProps) {
@@ -100,21 +124,18 @@ export function BeadSourceCanvas({
     canvas.height = source.height;
     context.clearRect(0, 0, source.width, source.height);
     drawRaster(context, source);
-    if (emptyCellIndex !== null) {
-      drawSelection(
-        context,
-        geometry,
-        columns,
-        emptyCellIndex,
-        "rgba(37, 99, 235, 0.26)",
-      );
+    if (showGrid) {
+      drawGrid(context, geometry, rows, columns);
     }
-    drawGrid(context, geometry, rows, columns);
+    if (emptyCellIndex !== null) {
+      drawSelection(context, geometry, columns, emptyCellIndex);
+    }
   }, [
     columns,
     emptyCellIndex,
     geometry,
     rows,
+    showGrid,
     source,
   ]);
 

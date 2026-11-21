@@ -57,28 +57,35 @@ export function BeadHandoffSummaryDialog({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="dialog__body">
-          <h2 id={titleId}>
-            {t("workshop.bead.handoffSummaryTitle")}
-          </h2>
-          <p>{t("workshop.bead.handoffSummaryDescription")}</p>
-          <div className="status-banner status-banner--info">
-            {interpolate(t("workshop.bead.handoffSummary"), {
-              rows,
-              columns,
-              width: widthMm,
-              height: heightMm,
-              thickness: thicknessMm,
-              compression,
-              irregularity,
-            })}
+          <div className="dialog__header-row">
+            <h2 id={titleId}>
+              {t("workshop.bead.handoffSummaryTitle")}
+            </h2>
+            <span className="meta-pill">
+              {columns} × {rows}
+            </span>
           </div>
-          <p>
-            {libraryLabel
-              ? interpolate(t("workshop.bead.handoffLibrary"), {
-                  label: libraryLabel,
-                })
-              : t("workshop.bead.handoffNoLibrary")}
-          </p>
+          <p>{t("workshop.bead.handoffSummaryDescription")}</p>
+          <div className="settings-well dialog__summary-well">
+            <p className="dialog__summary-specs">
+              {interpolate(t("workshop.bead.handoffSummary"), {
+                rows,
+                columns,
+                width: widthMm,
+                height: heightMm,
+                thickness: thicknessMm,
+                compression,
+                irregularity,
+              })}
+            </p>
+            <p className="dialog__summary-library">
+              {libraryLabel
+                ? interpolate(t("workshop.bead.handoffLibrary"), {
+                    label: libraryLabel,
+                  })
+                : t("workshop.bead.handoffNoLibrary")}
+            </p>
+          </div>
         </div>
         <footer className="dialog__footer">
           <Button

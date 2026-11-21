@@ -80,7 +80,7 @@ describe("Workshop SDK entry", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "编辑豆子" }),
+      await screen.findByRole("heading", { name: "拼豆编辑" }),
     ).toBeInTheDocument();
     await waitFor(() => {
       expect(harness.methods()).toEqual(
@@ -155,10 +155,10 @@ describe("Workshop SDK entry", () => {
     );
 
     const heading = await screen.findByRole("heading", {
-      name: "编辑豆子",
+      name: "拼豆编辑",
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "调整熨烫" }),
+      screen.getByRole("button", { name: "熨烫效果" }),
     );
     fireEvent.change(
       screen.getByRole("slider", { name: "熨烫程度" }),
@@ -180,7 +180,7 @@ describe("Workshop SDK entry", () => {
     });
 
     expect(
-      screen.getByRole("heading", { name: "Edit beads" }),
+      screen.getByRole("heading", { name: "Edit pattern" }),
     ).toBe(heading);
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(document.documentElement.lang).toBe("en-US");
@@ -190,7 +190,7 @@ describe("Workshop SDK entry", () => {
       ),
     ).toBe("#f8fafc");
     expect(
-      screen.getByRole("slider", { name: "Ironing level" }),
+      screen.getByRole("slider", { name: "Ironing melt" }),
     ).toHaveValue("84");
     expect(
       harness.methods().filter((method) => method === "project.latest"),
@@ -283,7 +283,7 @@ describe("Workshop SDK entry", () => {
       <ModuleEntry connect={async () => client} />,
     );
     const heading = await screen.findByRole("heading", {
-      name: "Edit beads",
+      name: "Edit pattern",
     });
     await waitFor(() => {
       expect(harness.methods()).toContain("project.latest");
@@ -308,7 +308,7 @@ describe("Workshop SDK entry", () => {
         },
       });
     });
-    expect(screen.getByRole("heading", { name: "Edit beads" })).toBe(
+    expect(screen.getByRole("heading", { name: "Edit pattern" })).toBe(
       heading,
     );
     expect(

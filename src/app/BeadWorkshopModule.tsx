@@ -61,7 +61,6 @@ import CropModal from "../ui/CropModal";
 import {
   PanelIntro,
   StatusBanner,
-  mutedSectionCardClass,
 } from "../ui/panelPrimitives";
 import {
   BeadWorkerClient,
@@ -170,6 +169,12 @@ function draftFromProject(
   const columns = swapsDimensions ? project.rows : project.columns;
   const originX = project.calibration.origin.x;
   const originY = project.calibration.origin.y;
+  const suggestion = suggestGrid(source, project.calibration.inputMode);
+  const matchesSuggestedGrid =
+    suggestion.rows === rows &&
+    suggestion.columns === columns &&
+    Math.abs(suggestion.geometry.originX - originX) < 0.5 &&
+    Math.abs(suggestion.geometry.originY - originY) < 0.5;
   return {
     inputMode: project.calibration.inputMode,
     rows,
@@ -177,8 +182,12 @@ function draftFromProject(
     geometry: {
       originX,
       originY,
-      cellWidth: (source.width - originX) / columns,
-      cellHeight: (source.height - originY) / rows,
+      cellWidth: matchesSuggestedGrid
+        ? suggestion.geometry.cellWidth
+        : (source.width - originX) / columns,
+      cellHeight: matchesSuggestedGrid
+        ? suggestion.geometry.cellHeight
+        : (source.height - originY) / rows,
     },
     orientation: { ...project.calibration.orientation },
     emptySelection: { ...project.calibration.emptySelection },
@@ -1287,12 +1296,16 @@ export function BeadWorkshopModule({
   return (
     <main
       className={`module-shell${
-        stage === "editor" ? " module-shell--editor" : ""
+        stage === "editor" || stage === "calibration"
+          ? " module-shell--editor"
+          : " module-shell--launchpad"
       }`}
     >
       <div
         className={`workbench-stack${
-          stage === "editor" ? " workbench-stack--editor" : ""
+          stage === "editor" || stage === "calibration"
+            ? " workbench-stack--editor"
+            : ""
         }`}
       >
         {visibleError ? (
@@ -1305,7 +1318,7 @@ export function BeadWorkshopModule({
         ) : null}
 
         {stage === "loading" ? (
-          <section className="panel panel--controls">
+          <section className="panel launchpad-card launchpad-card--loading">
             <StatusBanner>
               {t("workshop.bead.loadingProject")}
             </StatusBanner>
@@ -1313,38 +1326,101 @@ export function BeadWorkshopModule({
         ) : null}
 
         {stage === "upload" ? (
-          <>
-            <PanelIntro
-              eyebrow="Lumina"
-              title={t("app.name")}
-              description={t("workshop.bead.intro")}
-            />
-            <section
-              className={`${mutedSectionCardClass} panel--controls`}
-            >
-              <div>
-                <p className="review-summary">
-                  {t("workshop.bead.supportedInputs")}
-                </p>
-                <p className="sample-summary">
-                  {t("workshop.bead.localPrivacy")}
-                </p>
-                <p className="sample-summary">
-                  {t("workshop.bead.blankCanvasHint")}
-                </p>
+          <section className="panel launchpad-card">
+            <div className="launchpad-card__header">
+              <span className="launchpad-emblem" aria-hidden="true">
+                <svg viewBox="0 0 36 36" fill="none">
+                  <rect width="36" height="36" rx="9" fill="currentColor" fillOpacity="0.08" />
+                  <circle cx="12" cy="12" r="5.5" fill="#EF4444" />
+                  <circle cx="12" cy="12" r="2" fill="var(--bead-surface-strong)" />
+                  <circle cx="24" cy="12" r="5.5" fill="#F59E0B" />
+                  <circle cx="24" cy="12" r="2" fill="var(--bead-surface-strong)" />
+                  <circle cx="12" cy="24" r="5.5" fill="#0EA5E9" />
+                  <circle cx="12" cy="24" r="2" fill="var(--bead-surface-strong)" />
+                  <circle cx="24" cy="24" r="5.5" fill="#10B981" />
+                  <circle cx="24" cy="24" r="2" fill="var(--bead-surface-strong)" />
+                </svg>
+              </span>
+              <PanelIntro
+                title={t("app.name")}
+                description={t("workshop.bead.intro")}
+                badge={
+                  <span className="meta-pill">
+                    {t("workshop.bead.localPrivacy")}
+                  </span>
+                }
+              />
+            </div>
+
+            <div className="launchpad-grid">
+              <div className="settings-well launchpad-option">
+                <div className="launchpad-option__copy">
+                  <div className="launchpad-option__title-row">
+                    <svg
+                      aria-hidden="true"
+                      className="launchpad-option__icon"
+                      viewBox="0 0 20 20"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x="3" y="3" width="14" height="14" rx="2.5" />
+                      <path d="M3 8h14M8 3v14M13 3v14M3 13h14" />
+                    </svg>
+                    <h2 className="settings-well__heading">
+                      {t("workshop.bead.uploadImportTitle")}
+                    </h2>
+                  </div>
+                  <p className="review-summary">
+                    {t("workshop.bead.supportedInputs")}
+                  </p>
+                </div>
+                <Button
+                  label={t("workshop.bead.choosePattern")}
+                  loading={isPicking}
+                  onClick={handlePickImage}
+                  className="button--full"
+                />
               </div>
-              <Button
-                label={t("workshop.bead.choosePattern")}
-                loading={isPicking}
-                onClick={handlePickImage}
-              />
-              <Button
-                label={t("workshop.bead.createBlankCanvas")}
-                variant="secondary"
-                onClick={handleCreateBlankProject}
-              />
-            </section>
-          </>
+
+              <div className="settings-well launchpad-option">
+                <div className="launchpad-option__copy">
+                  <div className="launchpad-option__title-row">
+                    <svg
+                      aria-hidden="true"
+                      className="launchpad-option__icon"
+                      viewBox="0 0 20 20"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x="3" y="3" width="14" height="14" rx="2.5" strokeDasharray="2.5 2.5" />
+                      <circle cx="7.5" cy="7.5" r="1" fill="currentColor" stroke="none" />
+                      <circle cx="12.5" cy="7.5" r="1" fill="currentColor" stroke="none" />
+                      <circle cx="7.5" cy="12.5" r="1" fill="currentColor" stroke="none" />
+                      <circle cx="12.5" cy="12.5" r="1" fill="currentColor" stroke="none" />
+                    </svg>
+                    <h2 className="settings-well__heading">
+                      {t("workshop.bead.uploadBlankTitle")}
+                    </h2>
+                  </div>
+                  <p className="sample-summary">
+                    {t("workshop.bead.blankCanvasHint")}
+                  </p>
+                </div>
+                <Button
+                  label={t("workshop.bead.createBlankCanvas")}
+                  variant="secondary"
+                  onClick={handleCreateBlankProject}
+                  className="button--full"
+                />
+              </div>
+            </div>
+          </section>
         ) : null}
 
         {stage === "calibration" &&
@@ -1363,6 +1439,7 @@ export function BeadWorkshopModule({
             onChange={handleCalibrationChange}
             onRecognize={handleRecognize}
             onOpenCrop={() => setCropOpen(true)}
+            onReselectPattern={handlePickImage}
             onFitSquareGrid={handleFitSquareGrid}
             onReturnToEditor={
               recalibrationSession

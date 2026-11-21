@@ -57,7 +57,7 @@ describe("CropModal", () => {
   it("lets the user draw the retained region directly on the preview", () => {
     const { onConfirm } = renderCropModal();
     const preview = screen.getByRole("img", {
-      name: "拖拽选择要保留的图案区域",
+      name: "拖动框选要保留的图纸范围",
     });
     vi.spyOn(preview, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -87,7 +87,7 @@ describe("CropModal", () => {
       clientY: 80,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "应用裁剪" }),
+      screen.getByRole("button", { name: "完成裁剪" }),
     );
 
     expect(onConfirm).toHaveBeenCalledWith({
@@ -117,7 +117,7 @@ describe("CropModal", () => {
   it("can include the source image's right and bottom edges", () => {
     const { onConfirm } = renderCropModal();
     const preview = screen.getByRole("img", {
-      name: "拖拽选择要保留的图案区域",
+      name: "拖动框选要保留的图纸范围",
     });
     vi.spyOn(preview, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -147,7 +147,7 @@ describe("CropModal", () => {
       clientY: 100,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "应用裁剪" }),
+      screen.getByRole("button", { name: "完成裁剪" }),
     );
 
     expect(onConfirm).toHaveBeenCalledWith({
@@ -161,7 +161,7 @@ describe("CropModal", () => {
   it("keeps the full image when dragging from the bottom-right edge backwards", () => {
     const { onConfirm } = renderCropModal();
     const preview = screen.getByRole("img", {
-      name: "拖拽选择要保留的图案区域",
+      name: "拖动框选要保留的图纸范围",
     });
     vi.spyOn(preview, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -194,7 +194,7 @@ describe("CropModal", () => {
       clientY: 0,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "应用裁剪" }),
+      screen.getByRole("button", { name: "完成裁剪" }),
     );
 
     expect(onConfirm).toHaveBeenCalledWith({
@@ -208,7 +208,7 @@ describe("CropModal", () => {
   it("ignores right-clicks and events from another pointer", () => {
     const { onConfirm } = renderCropModal();
     const preview = screen.getByRole("img", {
-      name: "拖拽选择要保留的图案区域",
+      name: "拖动框选要保留的图纸范围",
     });
     vi.spyOn(preview, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -259,7 +259,7 @@ describe("CropModal", () => {
       clientY: 70,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "应用裁剪" }),
+      screen.getByRole("button", { name: "完成裁剪" }),
     );
 
     expect(onConfirm).toHaveBeenCalledWith({
@@ -268,5 +268,42 @@ describe("CropModal", () => {
       width: 250,
       height: 100,
     });
+  });
+
+  it("closes on Escape when idle and blocks Escape while busy", () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <CropModal
+        open
+        imageSrc="blob:test-pattern"
+        imageWidth={400}
+        imageHeight={200}
+        translate={t}
+        onClose={onClose}
+        onUseOriginal={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "裁剪画面" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    onClose.mockClear();
+    rerender(
+      <CropModal
+        open
+        busy
+        imageSrc="blob:test-pattern"
+        imageWidth={400}
+        imageHeight={200}
+        translate={t}
+        onClose={onClose}
+        onUseOriginal={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

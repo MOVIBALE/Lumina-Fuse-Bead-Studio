@@ -107,12 +107,12 @@ describe("BeadCalibrationStep", () => {
     render(<Harness onRecognize={onRecognize} />);
 
     const recognize = screen.getByRole("button", {
-      name: "识别拼豆矩阵",
+      name: "提取拼豆图案",
     });
     expect(recognize).toBeDisabled();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "图中没有空位" }),
+      screen.getByRole("button", { name: "全图无空格" }),
     );
     expect(recognize).toBeEnabled();
     fireEvent.click(recognize);
@@ -138,21 +138,21 @@ describe("BeadCalibrationStep", () => {
 
     expect(
       screen.getByText(
-        "检测到截图边框、多图布局或图纸未完整显示，请先裁剪并只保留一张完整图纸。",
+        "画面里带有截图边框或不止一张图，请先点右上角“裁剪画面”，只框出单张完整图纸。",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "裁剪图案" }),
+      screen.getByRole("button", { name: "裁剪画面" }),
     ).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: "识别拼豆矩阵" }),
+      screen.getByRole("button", { name: "提取拼豆图案" }),
     ).toBeDisabled();
   });
 
   it("maps source-canvas picks to an explicit empty sample only", () => {
     render(<Harness />);
     const canvas = screen.getByRole("img", {
-      name: "拼豆图纸网格校准",
+      name: "图纸网格预览",
     });
     vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -167,13 +167,14 @@ describe("BeadCalibrationStep", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "选择一个空位" }),
+      screen.getByRole("button", { name: "点选空格" }),
     );
     fireEvent.pointerDown(canvas, {
       clientX: 250,
       clientY: 150,
     });
-    expect(screen.getByText("空位样本：第 7 格")).toBeInTheDocument();
+    expect(screen.getByText("已选背景空格")).toBeInTheDocument();
+    expect(screen.getByText("第 2 行 · 第 3 列")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "选择透明支撑" }),
     ).not.toBeInTheDocument();
@@ -200,26 +201,26 @@ describe("BeadCalibrationStep", () => {
 
     expect(
       screen.getByText(
-        "当前网格不是正方形。可自动收紧右侧或下侧边界，也可手动调整行列、原点与裁剪。",
+        "现在的格子偏扁，拼豆格需要接近正方形。点下方按钮一键对齐，或微调行列数。",
       ),
     ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "自动收紧到正方形网格",
+        name: "一键对齐方格",
       }),
     );
     expect(onFitSquareGrid).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByRole("button", { name: "识别拼豆矩阵" }),
+      screen.getByRole("button", { name: "提取拼豆图案" }),
     ).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "旋转 90°" }));
     expect(
       screen.getByRole("button", { name: "旋转 90°" }),
     ).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "水平翻转" }));
+    fireEvent.click(screen.getByRole("button", { name: "左右翻转" }));
     expect(
-      screen.getByRole("button", { name: "水平翻转" }),
+      screen.getByRole("button", { name: "左右翻转" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -230,10 +231,10 @@ describe("BeadCalibrationStep", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "裁剪图案" }),
+      screen.getByRole("button", { name: "裁剪画面" }),
     ).toBeInTheDocument();
     const returnButton = screen.getByRole("button", {
-      name: "返回编辑器",
+      name: "返回摆豆",
     });
     expect(returnButton).toBeEnabled();
     fireEvent.click(returnButton);
@@ -243,7 +244,7 @@ describe("BeadCalibrationStep", () => {
       <Harness busy onReturnToEditor={onReturnToEditor} />,
     );
     const busyReturnButton = screen.getByRole("button", {
-      name: "返回编辑器",
+      name: "返回摆豆",
     });
     expect(busyReturnButton).toBeDisabled();
     fireEvent.click(busyReturnButton);
@@ -261,19 +262,19 @@ describe("BeadCalibrationStep", () => {
     );
 
     expect(
-      screen.getByText("正在分析图纸类型…"),
+      screen.getByText("正在看图识别…"),
     ).toBeInTheDocument();
     const returnButton = screen.getByRole("button", {
-      name: "返回编辑器",
+      name: "返回摆豆",
     });
     expect(returnButton).toBeEnabled();
     fireEvent.click(returnButton);
     expect(onReturnToEditor).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByRole("button", { name: "裁剪图案" }),
+      screen.getByRole("button", { name: "裁剪画面" }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "识别拼豆矩阵" }),
+      screen.getByRole("button", { name: "提取拼豆图案" }),
     ).toBeDisabled();
   });
 
@@ -284,26 +285,79 @@ describe("BeadCalibrationStep", () => {
 
     expect(
       screen.getByText(
-        "未能自动判断图纸类型，请手动确认。",
+        "没自动认出是哪种图纸，请在下方手动选一下。",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("正在分析图纸类型…"),
+      screen.queryByText("正在看图识别…"),
     ).not.toBeInTheDocument();
 
     rerender(<Harness busy classification={null} />);
     expect(
       screen.getByText(
-        "未能自动判断图纸类型，请手动确认。",
+        "没自动认出是哪种图纸，请在下方手动选一下。",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("正在分析图纸类型…"),
+      screen.queryByText("正在看图识别…"),
     ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "正在识别拼豆矩阵…",
+        name: "正在提取图案…",
       }),
     ).toBeDisabled();
+  });
+
+  it("rounds floating-point origin noise, shows sample row/column coordinates, and supports changing the pattern", () => {
+    const onReselectPattern = vi.fn();
+    render(
+      <BeadCalibrationStep
+        source={raster(1640, 1470)}
+        fileName="B0F80921A1F22C05A6A3D2F2E.png"
+        classification={{
+          mode: "numbered-grid",
+          confidence: 0.95,
+          scores: {
+            "numbered-grid": 0.95,
+            "hard-pixel": 0.12,
+            "ring-preview": 0.1,
+          },
+        }}
+        draft={initialDraft({
+          inputMode: "numbered-grid",
+          rows: 63,
+          columns: 72,
+          geometry: {
+            originX: 17.250000000004,
+            originY: 25.719999999998,
+            cellWidth: 22.2,
+            cellHeight: 22.2,
+          },
+          emptySelection: { kind: "sample", cellIndex: 1083 },
+        })}
+        busy={false}
+        translate={t}
+        onChange={vi.fn()}
+        onRecognize={vi.fn()}
+        onOpenCrop={vi.fn()}
+        onReselectPattern={onReselectPattern}
+        canCrop
+      />,
+    );
+
+    expect(
+      screen.getByRole("spinbutton", { name: "左上起点 X" }),
+    ).toHaveValue(17.25);
+    expect(
+      screen.getByRole("spinbutton", { name: "左上起点 Y" }),
+    ).toHaveValue(25.72);
+    expect(screen.getByText("已选背景空格")).toBeInTheDocument();
+    expect(screen.getByText("第 16 行 · 第 4 列")).toBeInTheDocument();
+    expect(
+      screen.getByRole("toolbar", { name: "画布缩放" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "换一张图" }));
+    expect(onReselectPattern).toHaveBeenCalledTimes(1);
   });
 });
