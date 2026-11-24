@@ -1,53 +1,49 @@
 # Lumina Fuse Bead Studio
 
-Lumina Studio 的官方拼豆工作台模块。它把清晰图纸或截图分析为可编辑的拼豆矩阵，模拟不同压合程度下豆子之间的挤压与熨烫融合，再把确认后的源色 SVG 交给 Lumina 原有的矢量叠色打印流程，并附带 PNG 兼容回退。
+[English](README.md) · [简体中文](README_CN.md) · [Workflow](#from-pattern-chart-to-3d-print) · [Development](#local-development-and-packaging) · [Permissions](#permissions-and-project-format) · [Lumina Studio](https://github.com/lumina-layer-studio/Lumina-Layers)
 
-它不是普通的“图片转像素图”滤镜。自动识别只是进入工作台的一条路径，网格、空位、低置信度格和最终颜色都可以继续校正。
+The official Fuse Bead Studio (`lumina.bead-pattern`) Creative Workshop module for [Lumina Studio](https://github.com/lumina-layer-studio/Lumina-Layers).
 
-## 支持的图纸
+Fuse Bead Studio turns bead pattern charts and clean screenshots into an editable bead matrix, previews how beads press and fuse together under different ironing levels, lets you check how your palette maps onto your active Lumina filaments or LUTs, and hands crisp vector SVG geometry back to Lumina Studio for flat full-color FDM printing.
 
-- **编号网格图**：识别规则网格，尽量避开格线、编号和覆盖文字后采样颜色。
-- **硬边像素图**：从整数像素块推断正方形网格，保留透明像素与普通空位的区别。
-- **圆豆俯视图**：从豆子圆环采样颜色，并排除中心孔。
+## Supported pattern charts
 
-第一版面向清晰、正视、单一图案的 PNG、JPEG 或 WebP。透视实拍、倾斜网格、光照校正和通用照片转像素画不在支持范围内；不确定结果会进入校准或低置信度待处理列表，不会静默猜测。
+Fuse Bead Studio recognizes clear, front-facing PNG, JPEG, and WebP pattern charts in three common styles:
 
-## 从图纸到可打印图像
+- **Numbered grid charts:** detects regular grid lines and samples each cell's bead color around grid strokes and printed color codes.
+- **Pixel-art bead charts:** infers square bead cells from crisp integer pixel blocks while distinguishing transparent background areas from empty pegboard slots.
+- **Top-down bead previews:** samples colors along each circular bead ring while ignoring the center hole.
 
-1. 选择图纸，确认识别类型。
-2. 裁剪并校准行列、正方形网格、方向和空位样本。
-3. 在矩阵中绘制、擦除、吸色或填充，逐项处理低置信度格。
-4. 调整压合程度并实时查看豆间挤压效果。
-5. 可选地把“图纸原色”映射到 Lumina 当前 LUT 或耗材档案，预览可打印颜色。
-6. 确认物理尺寸和源色图像后，交给 Lumina 图像转换。
+Ambiguous or low-confidence cells are highlighted in a review list so you can inspect and touch them up before exporting. Full recognition rules and input guidelines are in [docs/recognition-contract.md](docs/recognition-contract.md).
 
-默认豆距是 **2.6 mm**，表示相邻豆子中心之间的物理间距。交接画布尺寸始终为 `列数 × 豆距` 与 `行数 × 豆距`。
+## From pattern chart to 3D print
 
-### 压合程度
+1. **Import a chart** and confirm its pattern style (numbered grid, pixel chart, or bead ring view).
+2. **Align the grid:** crop the pattern and calibrate row/column counts, orientation, and empty-slot samples if needed.
+3. **Edit the bead matrix:** paint, erase, eyedrop, flood-fill, or step through flagged low-confidence cells.
+4. **Preview iron fusion:** drag the press/fusion slider from `0` to `100` to choose how open or fused the bead rings look:
 
-| 数值 | 预览含义 |
-| ---: | --- |
-| 0 | 保留完整中心孔和豆间间隙 |
-| 50 | 标准压合，仍能看到细小十字或菱形凹点 |
-| 80 | 高压合，豆间缝隙明显收窄但仍可辨认 |
-| 100 | 完全压紧，关闭中心孔和四豆交汇凹点 |
+   | Fusion level | Geometry preview |
+   | ---: | --- |
+   | `0` | Distinct circular beads with full center holes and inter-bead gaps |
+   | `50` | Standard iron press with soft square contact and small four-bead dimples |
+   | `80` | Heavy fuse with narrow remaining pinholes and seams |
+   | `100` | Fully fused surface with closed center holes and four-bead corners |
 
-99 仍会保留可见的微小开口；只有 100 才使用完全闭合的几何规则。这个参数描述同一种拼豆在不同熨烫/压合方法下的状态，不会改变豆子身份。
+5. **Check printable colors (optional):** preview your pattern against your active Lumina LUT or filament profiles while keeping the chart's original source colors intact in your project.
+6. **Send to Lumina Studio:** hand off the source-color vector SVG, compatible PNG fallback, physical size, and `bead-recipe/v1` metadata to Lumina's 3D print converter.
 
-### 图纸原色与 Lumina 可打印色
+By default, bead center-to-center pitch is **2.6 mm** (mini bead scale), giving an output canvas of `columns × 2.6 mm` by `rows × 2.6 mm`.
 
-“图纸原色”是工程和导出配方的权威颜色，不会因切换 LUT、耗材档案或手动映射而被覆盖。“当前打印色库”只是一个可更新、可逐色调整的预览映射；色库发生变化时，旧映射会明确标记为过期，也不会自动重排、隐藏或合并品牌颜色。
+## Install in Lumina Studio
 
-交给 Lumina 的始终是源色 SVG、兼容 PNG、物理尺寸和 `bead-recipe/v1` 配方。分层、叠色、3MF/打印输出仍由 Lumina 现有转换流程负责；本模块不模拟哑光烘焙纸或用户后处理材质。
+Install and update **Fuse Bead Studio** directly from **Creative Workshop** inside Lumina Studio. Official releases are published as `lumina.bead-pattern-<version>.lumina-workshop` archives with `.sha256` checksums on [GitHub Releases](https://github.com/MOVIBALE/Lumina-Fuse-Bead-Studio/releases) and indexed in [`Lumina-Workshop-Registry`](https://github.com/lumina-layer-studio/Lumina-Workshop-Registry).
 
-## 安装与本地开发
+## Local development and packaging
 
-正式版本以单个 `lumina.bead-pattern-<version>.lumina-workshop` GitHub Release 资产发布，并附带同名 SHA-256 文件。Lumina 通过创意工坊安装、启用、更新、回滚和卸载这个模块。
-模块仅依赖公开的
-[`@lumina/workshop-sdk`](https://github.com/lumina-layer-studio/Lumina-Workshop-SDK)，
-并把依赖固定到带精确版本号的不可变 Release 资产。
+Fuse Bead Studio is built with React, TypeScript, Vite, and [`@lumina/workshop-sdk`](https://github.com/lumina-layer-studio/Lumina-Workshop-SDK).
 
-本地开发：
+Requires Node.js 22+ and `pnpm@10.33.2`:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -57,29 +53,21 @@ node scripts/benchmark.mjs --check-regression
 pnpm package
 ```
 
-随后在 Lumina 的“创意工坊 → 开发者”中安装 `artifacts/` 下的本地 `.lumina-workshop` 文件。不要用普通网页直接替代宿主验收；真实权限、项目存储、色库读取和图像交接只存在于 Lumina 宿主中。
+`pnpm package` runs the test suite, builds the single-file UI bundle, and writes a deterministic `artifacts/lumina.bead-pattern-<version>.lumina-workshop` archive alongside its `.sha256` checksum. To test a local build end-to-end, install that `.lumina-workshop` file inside Lumina Studio under **Creative Workshop → Developer**.
 
-详细测试步骤见 [docs/testing.md](docs/testing.md)，识别边界见 [docs/recognition-contract.md](docs/recognition-contract.md)。
+See [docs/testing.md](docs/testing.md) for test coverage and host verification steps.
 
-## 权限与兼容性
+## Permissions and project format
 
-模块只申请四项公开能力：
+The module targets Lumina Workshop API `>=1.0.0 <2.0.0` and declares four scoped capabilities in [`manifest.json`](manifest.json):
 
-- `image.pick`：由 Lumina 选择并读取一张图纸；
-- `project.storage`：保存可恢复的本地工程；
-- `color-library.read`：读取去除内部路径后的当前色库；
-- `handoff.image`：经用户确认后把源色 SVG 与兼容 PNG 交给转换器。
+- `image.pick` — select and read a pattern chart image from Lumina Studio
+- `project.storage` — save and reopen local bead projects (`bead-project/v1`)
+- `color-library.read` — read the active LUT or filament library for color previews
+- `handoff.image` — send the confirmed SVG, PNG fallback, and physical dimensions to the converter
 
-运行时没有通用网络、文件系统路径、Electron API 或跨模块访问能力。完整信任边界见 [docs/security.md](docs/security.md)。
+It also supports optional live `.lum` workspace snapshots (`projectSnapshots` / `bead-workspace/v1`) so unsaved edits can be saved and restored alongside a host Lumina project; see [docs/portable-projects.md](docs/portable-projects.md) and [docs/security.md](docs/security.md).
 
-`bead-project/v1` 与 `bead-recipe/v1` 在 1.x 中保持向后可读；新增字段必须是可选字段，破坏性变化必须使用新的 schema 版本并提供显式迁移。安装包自身遵循 Lumina Workshop API `>=1.0.0 <2.0.0`。
+## License
 
-## English
-
-Fuse Bead Studio is the official installable Lumina Workshop module for turning clear pattern charts into an editable bead matrix and a pressure-aware fused-bead render. It supports numbered grids, hard-pixel charts, and top-down ring previews; uncertain cells stay visible and editable.
-
-The source palette remains authoritative. A selected Lumina LUT or material archive may provide a separate printable-color preview without mutating, ranking, hiding, or deduplicating source or library colors. Handoff sends the source-color SVG, a compatible PNG fallback, the `2.6 mm` default pitch, and the `bead-recipe/v1` payload into Lumina's native vector converter.
-
-Pressure presets at 0, 50, and 100 range from tightly packed open holes to fully closed center holes and four-bead valleys; the slider still supports every intermediate value, and 99 deliberately retains residual openings.
-
-The module runs without general network, filesystem-path, Electron, or cross-module access. See [testing](docs/testing.md), [recognition contract](docs/recognition-contract.md), and [security](docs/security.md) for the complete development and trust boundaries.
+Licensed under the [MIT License](LICENSE). For security reports, follow [SECURITY.md](SECURITY.md).
